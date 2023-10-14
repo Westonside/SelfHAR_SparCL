@@ -51,6 +51,7 @@ class MyCIFAR10(CIFAR10):
         return img, target, not_aug_img
 
 
+
 class SequentialCIFAR10(ContinualDataset):
 
     NAME = 'seq-cifar10'
@@ -60,9 +61,9 @@ class SequentialCIFAR10(ContinualDataset):
     TOTAL_CLASSES = 10
     TRANSFORM = transforms.Compose(
             [transforms.RandomCrop(32, padding=4),
-             transforms.RandomHorizontalFlip(),
+             transforms.RandomHorizontalFlip(), # image transformations that can be applied
              transforms.ToTensor(),
-             transforms.Normalize((0.4914, 0.4822, 0.4465),
+             transforms.Normalize((0.4914, 0.4822, 0.4465), #normalize the data
                                   (0.2470, 0.2435, 0.2615))])
 
     def get_data_loaders(self, return_dataset=False):
@@ -73,16 +74,16 @@ class SequentialCIFAR10(ContinualDataset):
         
         download = True if self.i == 0 else False
 
-        train_dataset = MyCIFAR10(base_path() + 'CIFAR10', train=True,
+        train_dataset = MyCIFAR10(base_path() + 'CIFAR10', train=True, # get the training set
                                   download=download, transform=transform)
-        if self.args.validation:
+        if self.args.validation: # for my purpose I am skipping the validation stage
             train_dataset, test_dataset = get_train_val(train_dataset,
                                                     test_transform, self.NAME)
         else:
-            test_dataset = CIFAR10(base_path() + 'CIFAR10',train=False,
+            test_dataset = CIFAR10(base_path() + 'CIFAR10',train=False, # get the testing set
                                    download=download, transform=test_transform)
 
-        train, test = store_masked_loaders(train_dataset, test_dataset, self)
+        train, test = store_masked_loaders(train_dataset, test_dataset, self) # this will split into tasks
         # TODO(zifeng): do this for other datasets
         if not return_dataset:
             return train, test
@@ -98,6 +99,9 @@ class SequentialCIFAR10(ContinualDataset):
 
         return train_loader
 
+
+
+    # what is stored in the buffer is non augmented
     @staticmethod
     def get_transform():
         transform = transforms.Compose(

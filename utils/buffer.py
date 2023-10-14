@@ -16,14 +16,14 @@ def reservoir(num_seen_examples: int, buffer_size: int) -> int:
     :param buffer_size: the maximum buffer size
     :return: the target index if the current image is sampled, else -1
     """
-    if num_seen_examples < buffer_size:
+    if num_seen_examples < buffer_size: # if the buffer is not full it will incrementally add values into the buffer
         return num_seen_examples
 
-    rand = np.random.randint(0, num_seen_examples + 1)
+    rand = np.random.randint(0, num_seen_examples + 1) # get an index in between 0 and sthe seen examples
     if rand < buffer_size:
         return rand
     else:
-        return -1
+        return -1 # return -1 if this is above the buffer size
 
 
 def ring(num_seen_examples: int, buffer_portion_size: int, task: int) -> int:
@@ -35,16 +35,16 @@ class Buffer:
     The memory buffer of rehearsal method.
     """
     def __init__(self, buffer_size, device, n_tasks=None, mode='reservoir'):
-        assert mode in ['ring', 'reservoir']
-        self.buffer_size = buffer_size
-        self.device = device
-        self.num_seen_examples = 0
-        self.functional_index = eval(mode)
-        if mode == 'ring':
-            assert n_tasks is not None
-            self.task_number = n_tasks
-            self.buffer_portion_size = buffer_size // n_tasks
-        self.attributes = ['examples', 'labels', 'logits', 'task_labels']
+        assert mode in ['ring', 'reservoir'] #ensure one of the correct buffer modes
+        self.buffer_size = buffer_size #set the buffer size
+        self.device = device #set the dvice
+        self.num_seen_examples = 0 #default the seen examples
+        self.functional_index = eval(mode) #this evaluates an expression if it is legal python then it will execute the python code passed in
+        if mode == 'ring': #if ring mode j
+            assert n_tasks is not None #assert there are a certain nubmer of tasks
+            self.task_number = n_tasks #set the number of tasks
+            self.buffer_portion_size = buffer_size // n_tasks #divide the buffer up into tasks
+        self.attributes = ['examples', 'labels', 'logits', 'task_labels'] # set the attributes of the buffer
 
     def init_tensors(self, examples: torch.Tensor, labels: torch.Tensor,
                      logits: torch.Tensor, task_labels: torch.Tensor) -> None:
@@ -55,11 +55,11 @@ class Buffer:
         :param logits: tensor containing the outputs of the network
         :param task_labels: tensor containing the task labels
         """
-        for attr_str in self.attributes:
-            attr = eval(attr_str)
-            if attr is not None and not hasattr(self, attr_str):
-                typ = torch.int64 if attr_str.endswith('els') else torch.float32
-                setattr(self, attr_str, torch.zeros((self.buffer_size,
+        for attr_str in self.attributes: # for all the attributes
+            attr = eval(attr_str) #this will set attribute to the string passed in and run as python
+            if attr is not None and not hasattr(self, attr_str): # if the attribute has a value and the bugffer has the attribute
+                typ = torch.int64 if attr_str.endswith('els') else torch.float32 # create a multi-dimensional(tensor) of either int 64 or float 32
+                setattr(self, attr_str, torch.zeros((self.buffer_size, #set the attribute of the buffer to be aatribute = a buffer of 0s with size buffer size and a shape of the attribute shape (skipping the baetch size)
                         *attr.shape[1:]), dtype=typ, device=self.device))
 
     def add_data(self, examples, labels=None, logits=None, task_labels=None):
@@ -71,11 +71,11 @@ class Buffer:
         :param task_labels: tensor containing the task labels
         :return:
         """
-        if not hasattr(self, 'examples'):
-            self.init_tensors(examples, labels, logits, task_labels)
+        if not hasattr(self, 'examples'): # if the buffer does not the attribute of storing eamples
+            self.init_tensors(examples, labels, logits, task_labels) #create a new tensor for the examles
 
-        for i in range(examples.shape[0]):
-            index = reservoir(self.num_seen_examples, self.buffer_size)
+        for i in range(examples.shape[0]):  # go through all examples that were in the batch so go through the 32 examples
+            index = reservoir(self.num_seen_examples, self.buffer_size)  # get the index using the resevoir algo
             self.num_seen_examples += 1
             if index >= 0:
                 self.examples[index] = examples[i].to(self.device)
@@ -93,15 +93,15 @@ class Buffer:
         :param transform: the transformation to be applied (data augmentation)
         :return:
         """
-        if size > min(self.num_seen_examples, self.examples.shape[0]):
-            size = min(self.num_seen_examples, self.examples.shape[0])
+        if size > min(self.num_seen_examples, self.examples.shape[0]): #if the size(batch) is greater than the number of inputs seen or inputs in the buffer
+            size = min(self.num_seen_examples, self.examples.shape[0]) # set the size to be what is in the buffer
 
-        choice = np.random.choice(min(self.num_seen_examples, self.examples.shape[0]),
+        choice = np.random.choice(min(self.num_seen_examples, self.examples.shape[0]), # you will then choose random values in the buffer
                                   size=size, replace=False)
-        if transform is None: transform = lambda x: x
-        ret_tuple = (torch.stack([transform(ee.cpu())
-                            for ee in self.examples[choice]]).to(self.device),)
-        for attr_str in self.attributes[1:]:
+        if transform is None: transform = lambda x: x # if there is not a transformation is the identity function
+        ret_tuple = (torch.stack([transform(ee.cpu()) # this will then stack all examples to a list and apply the transformation
+                            for ee in self.examples[choice]]).to(self.device),) # gets the selected sampels
+        for attr_str in self.attributes[1:]: # this will add teh desired attributes that you want in our buffer so in our case ['labels', 'logits', 'task_labels']
             if hasattr(self, attr_str):
                 attr = getattr(self, attr_str)
                 ret_tuple += (attr[choice],)

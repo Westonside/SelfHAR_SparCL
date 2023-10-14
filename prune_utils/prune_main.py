@@ -43,12 +43,12 @@ def prune_init(args, model, logger=None, pre_defined_mask=None):
             prune_harden(args, model)
 
         prune_algo = None
-        retrain = SparseTraining(args, model, logger, pre_defined_mask)
+        retrain = SparseTraining(args, model, logger, pre_defined_mask) # if specified set retrain to be a sparse training set up
         return
 
 
 def prune_update(epoch=0, batch_idx=0):
-    retrain.update_mask(epoch, batch_idx)
+    retrain.update_mask(epoch, batch_idx) # update the mask for each epoch
 
 
 def prune_harden(args, model, option=None):
@@ -63,17 +63,17 @@ def prune_harden(args, model, option=None):
     # self.logger.info("Hardened weight sparsity: name, num_nonzeros, total_num, sparsity")
     print("Hardened weight sparsity: name, num_nonzeros, total_num, sparsity")
     first = True
-    for (name, W) in model.named_parameters():
+    for (name, W) in model.named_parameters(): # get the parameters
         if name not in prune_ratios:  # ignore layers that do not have rho
-            continue
+            continue # if weight does not have a specified prune ratio
         cuda_pruned_weights = None
-        prune_ratio = prune_ratios[name]
+        prune_ratio = prune_ratios[name] # get the prune ratio for the current weight
         if option == None:
-            cuda_pruned_weights = prune_weight(args, configs, name, W, prune_ratio, first)  # get sparse model in cuda
+            cuda_pruned_weights = prune_weight(args, configs, name, W, prune_ratio, first)  # get sparse model in cuda prune the weight
             first = False
         else:
             raise Exception("not implmented yet")
-        W.data = cuda_pruned_weights.cuda().type(W.dtype)  # replace the data field in variable
+        W.data = cuda_pruned_weights.cuda().type(W.dtype)  # replace the current weight's values with the pruned one
 
         if args.sp_admm_sparsity_type == "block":
             block = eval(args.sp_admm_block)
@@ -106,26 +106,26 @@ def prune_harden(args, model, option=None):
                 bn_bias.mul_(mask)
                 # bias.data.mul_(mask)
 
-        non_zeros = W.detach().cpu().numpy() != 0
-        non_zeros = non_zeros.astype(np.float32)
-        num_nonzeros = np.count_nonzero(non_zeros)
-        total_num = non_zeros.size
-        sparsity = 1 - (num_nonzeros * 1.0) / total_num
+        non_zeros = W.detach().cpu().numpy() != 0 # get the non zero values of the weight
+        non_zeros = non_zeros.astype(np.float32) # convert the bool arr to a list so that it can be counted
+        num_nonzeros = np.count_nonzero(non_zeros) # count the nubmer of non zero values
+        total_num = non_zeros.size # get the total number of values
+        sparsity = 1 - (num_nonzeros * 1.0) / total_num # calcualte the sparsity
         print("{}: {}, {}, {}".format(name, str(num_nonzeros), str(total_num), str(sparsity)))
         # self.logger.info("{}: {}, {}, {}".format(name, str(num_nonzeros), str(total_num), str(sparsity)))
 
 
 def prune_weight(args, configs, name, weight, prune_ratio, first):
     if prune_ratio == 0.0:
-        return weight
+        return weight # if there is to be no weights
     # if pruning too many items, just prune everything
     if prune_ratio >= 0.999:
-        return weight * 0.0
+        return weight * 0.0 # if the prune raito is super hight 0 out the weight
     if args.sp_admm_sparsity_type == "irregular_global":
         _, res = weight_pruning(args, configs, name, weight, prune_ratio)
-    else:
-        sp_admm_sparsity_type_copy = copy.copy(args.sp_admm_sparsity_type)
-        sparsity_type_list = (args.sp_admm_sparsity_type).split("+")
+    else: # case of using irregular sparsity like we are currently using
+        sp_admm_sparsity_type_copy = copy.copy(args.sp_admm_sparsity_type) # make a copy of the sparsity type string
+        sparsity_type_list = (args.sp_admm_sparsity_type).split("+") # if there are multiple sparsity types get them in a list
         if len(sparsity_type_list) != 1: #multiple sparsity type
             print(sparsity_type_list)
             for i in range(len(sparsity_type_list)):
@@ -137,10 +137,10 @@ def prune_weight(args, configs, name, weight, prune_ratio, first):
                 print(np.sum(weight.detach().cpu().numpy() != 0))
             return weight.to(weight.device).type(weight.dtype)
         else:
-            _, res = weight_pruning(args, configs, name, weight, prune_ratio)
+            _, res = weight_pruning(args, configs, name, weight, prune_ratio) #if just one sparsity type go to weight pruning
+           #this function removes weights under the percentile in the prune ratio (75 in our case) and returns the weight
 
-
-    return res.to(weight.device).type(weight.dtype)
+    return res.to(weight.device).type(weight.dtype) # convert the pruned weight to a format the gpu can use
 
 
     return res.to(weight.device).type(weight.dtype)
@@ -244,7 +244,7 @@ def update_prune_ratio(args, model, prune_ratios, global_sparsity):
 
 
 def prune_print_sparsity(model=None, logger=None, show_sparse_only=False, compressed_view=False):
-    if model is None:
+    if model is None: #if there is not a configurerd model
         if prune_algo:
             model = prune_algo.model
         elif retrain:
@@ -288,9 +288,9 @@ def prune_print_sparsity(model=None, logger=None, show_sparse_only=False, compre
         return
 
     print("The sparsity of all parameters: name, num_nonzeros, total_num, shape, sparsity")
-    for (name, W) in model.named_parameters():
-        non_zeros = W.detach().cpu().numpy().astype(np.float32) != 0
-        num_nonzeros = np.count_nonzero(non_zeros)
+    for (name, W) in model.named_parameters(): # go through all the named parameters
+        non_zeros = W.detach().cpu().numpy().astype(np.float32) != 0 # get the number of non zero values in the weight
+        num_nonzeros = np.count_nonzero(non_zeros) # count the number of non zeros
         total_num = non_zeros.size
         sparsity = 1 - (num_nonzeros * 1.0) / total_num
         print("{}: {}, {}, {}, [{}]".format(name, str(num_nonzeros), str(total_num), non_zeros.shape, str(sparsity)))

@@ -113,37 +113,37 @@ def weight_pruning(args, configs, name, w, prune_ratio, mask_fixed_params=None):
     Returns:
          mask for nonzero weights used for retraining
          a pytorch tensor whose elements/column/row that have lowest l2 norms(equivalent to absolute weight here) are set to zero
-
+    This will prune weights by using the prune ratio which lists the percentile the weights should be equal to or over to not be pruned, if there are gradients for the weights, then it will include the gradient into the weight value
     """
 
-    weight = w.detach().clone().cpu().numpy()  # convert cpu tensor to numpy
-    weight_ori = copy.copy(weight)
+    weight = w.detach().clone().cpu().numpy()  # convert cpu tensor to numpy vector
+    weight_ori = copy.copy(weight) #copy the original weight
 
     w_grad = None
-    if not w.grad is None and args.sp_lmd:
-        grad_copy = copy.copy(w.grad)
-        w_grad = grad_copy.detach().clone().cpu().numpy()
+    if not w.grad is None and args.sp_lmd: # if there is gradient and the sparsity lmd is set
+        grad_copy = copy.copy(w.grad) # copy the gradient
+        w_grad = grad_copy.detach().clone().cpu().numpy() # move the gradient to numpy arr so that it can be modified
 
-    if mask_fixed_params is not None:
+    if mask_fixed_params is not None: # if there are fixed mask parameters in the mask
         mask_fixed_params = mask_fixed_params.detach().cpu().numpy()
 
-    percent = prune_ratio * 100
-    if (args.sp_admm_sparsity_type == "irregular") or (args.sp_admm_sparsity_type == "irregular_global"):
+    percent = prune_ratio * 100 #convert the prune ratio to a percentage this was the lower bound value originally
+    if (args.sp_admm_sparsity_type == "irregular") or (args.sp_admm_sparsity_type == "irregular_global"): #if you have irregular sparsity types (CURRENTLY MY situation does)
 
-        weight_temp = np.abs(weight)  # a buffer that holds weights with absolute values
-        if not w_grad is None:
-            grad_temp = np.abs(w_grad)
-            imp_temp = weight_temp + (args.sp_lmd * grad_temp)
+        weight_temp = np.abs(weight)  # a buffer that holds weights with absolute values so that you can capture the magnitude of each weigth value
+        if not w_grad is None: # if the weight gradient is set
+            grad_temp = np.abs(w_grad) #get the absolute values of the gradient so that you can capture the magnitude of the gradient
+            imp_temp = weight_temp + (args.sp_lmd * grad_temp) # calculate the temporary weight values to include the weight and the gradient but modifying the gradient value but the sp_lmd
         else:
-            imp_temp = weight_temp
-        percentile = np.percentile(imp_temp, percent)  # get a value for this percentitle
-        under_threshold = imp_temp < percentile
-        above_threshold = imp_temp > percentile
+            imp_temp = weight_temp # if no weight gradient then set the imp temp to be the absolute value of the weight temporary value
+        percentile = np.percentile(imp_temp, percent)  # get a value that is in the 75th percentile  of magnitude this is in absolute value (in my case this will get the vlaues in the 75th percentile)
+        under_threshold = imp_temp < percentile # get the values that are below this percentile  this will be a boolean list
+        above_threshold = imp_temp > percentile # get the values above the 75th percentile (bool list)
         above_threshold = above_threshold.astype(
-            np.float32)  # has to convert bool to float32 for numpy-tensor conversion
+            np.float32)  # has to convert bool to float32 for numpy-tensor conversion this will be 1 to indicate if the value is above the listed percentile and 0 if not to be masked
         # weight[under_threshold] = 0
-        ww = weight * above_threshold
-        return torch.from_numpy(above_threshold), torch.from_numpy(ww)
+        ww = weight * above_threshold #multiply the weights by the weights the bool array containing 1 indicating if the weight is over the threshold, this will remove all values under the threshold and keep the ones over the threshold the ones under will be multiplied by 0
+        return torch.from_numpy(above_threshold), torch.from_numpy(ww) # return two tensors the first containing the bool converted to int list containing values over 75th percentile(mask) and the second value is the weights above or equal to the 75th percentile
 
     elif (args.sp_admm_sparsity_type == "random_irregular"):
 
@@ -374,7 +374,7 @@ def weight_growing(args, name, pruned_weight_np, lower_bound_value, upper_bound_
     if mask_fixed_params is not None:
         mask_fixed_params = mask_fixed_params.detach().cpu().numpy()
 
-    if upper_bound_value == 0:
+    if upper_bound_value == 0: # if the upper bound of growing is 0
         print("==> GROW: {}: to DENSE despite the sparsity type is \n".format(name))
         np_updated_mask = np.ones_like(pruned_weight_np, dtype=np.float32)
         updated_mask = torch.from_numpy(np_updated_mask).cuda()
@@ -388,27 +388,27 @@ def weight_growing(args, name, pruned_weight_np, lower_bound_value, upper_bound_
         updated_mask = torch.from_numpy(np_updated_mask).cuda()
         return updated_mask
 
-    if (args.sp_admm_sparsity_type == "irregular"):
+    if (args.sp_admm_sparsity_type == "irregular"): # if there is irregualr sparsity
         # randomly select and set zero weights to non-zero to restore sparsity
-        non_zeros_prune = pruned_weight_np != 0
+        non_zeros_prune = pruned_weight_np != 0 # get the values that are not zero from the pruned weight
 
         shape = pruned_weight_np.shape
-        weight1d = pruned_weight_np.reshape(1, -1)[0]
-        zeros_indices = np.where(weight1d == 0)[0]
-        if args.sp_global_magnitude:
+        weight1d = pruned_weight_np.reshape(1, -1)[0] # reshape the pruned weight this will change the shappe to have 1 row and as many columns the -1 says automatically calculate the # of cols based on total elements in array and get the one array from the 2d array this makes the array 1d
+        zeros_indices = np.where(weight1d == 0)[0] # get the index of values that are 0
+        if args.sp_global_magnitude: # if there is global sparsity magnitude
             num_added_zeros = int((lower_bound_value - upper_bound_value) * np.size(weight1d))
-        else:
-            num_added_zeros = int(np.size(zeros_indices) - upper_bound_value * np.size(weight1d))
-        num_added_zeros = num_added_zeros if num_added_zeros < np.size(zeros_indices) else np.size(zeros_indices)
-        num_added_zeros = num_added_zeros if num_added_zeros > 0 else 0
-        target_sparsity = 1 - (np.count_nonzero(non_zeros_prune) + num_added_zeros) * 1.0 / np.size(pruned_weight_np)
-        indices = np.random.choice(zeros_indices,
+        else: # the upper bound is the desired sparsity (in our case: 0.74) so this will get the diff between the current sparsity and the desired sparsity in the total weight
+            num_added_zeros = int(np.size(zeros_indices) - upper_bound_value * np.size(weight1d)) # substract the size of zero values by the upper bound value * the number of values in the weights ex: 36864 - (0.74 * 49512) this will get this will not add more zeros than are present in the weight
+        num_added_zeros = num_added_zeros if num_added_zeros < np.size(zeros_indices) else np.size(zeros_indices) # if the number of zero values is greater than the  number of added zeros then the number of number of added zeros otherwise return the number of zero values
+        num_added_zeros = num_added_zeros if num_added_zeros > 0 else 0 # if the number of zeros is greater than zero then return the value else 0
+        target_sparsity = 1 - (np.count_nonzero(non_zeros_prune) + num_added_zeros) * 1.0 / np.size(pruned_weight_np) # get the sparsity by 1- the number of nonzeros in the pruned weight  + the nubmer of added zeros /  size of the weight  1- 12271(non zero values in pruned tensor) + 508(zeros added) /49152(total values)
+        indices = np.random.choice(zeros_indices, #take the indicies of the zero values in the weight and choose num_added_zeros number of indicies that are to be selected to be grown
                                    num_added_zeros,
                                    replace=False)
         print("==> CALCULATE: all zeros: {}, need grow {} zeros, selected zeros: {} ".format(len(zeros_indices),
                                                                                              num_added_zeros,
                                                                                              len(indices)))
-
+        #this says there are that many zeros and you need to introduce that many zeros and you selected the following
         # initialize selected weights
         if update_init_method == "weight":
             pass
@@ -432,17 +432,17 @@ def weight_growing(args, name, pruned_weight_np, lower_bound_value, upper_bound_
             #
             # # write updated weights back to model
             # model.state_dict()[name].data.copy_(torch.from_numpy(weight))
-        elif update_init_method == "zero":
+        elif update_init_method == "zero": # the update init method will set the selected zero values to be "grown back" to be set to -1
             # set selected weights to -1 to get corrrect updated masks
-            weight1d[indices] = -1
-            weight = weight1d.reshape(shape)
-            non_zeros_updated = weight != 0
-            non_zeros_updated = non_zeros_updated.astype(np.float32)
+            weight1d[indices] = -1 # set the randomly selected inactive weight  values to -1
+            weight = weight1d.reshape(shape) # reshape back to the oringinal tensor
+            non_zeros_updated = weight != 0 # get the values where the weight is not 0 of the now updated values
+            non_zeros_updated = non_zeros_updated.astype(np.float32) # convert true -> 1 false -> 0 this allows for the values that are -1 to be shown as 1 to be activated in order to update the mask
             print("==> GROW: {}: revise sparse mask to sparsity {}\n".format(name, target_sparsity))
-
+            #what is happening above is that the selected inactive values will be set to be -1 and a new mask will be made from all the values that are not 0 (includes -1) so  that you know the new mask that should be active
             # update mask
             # zero_mask = torch.from_numpy(non_zeros_updated).cuda()
-            np_updated_zero_one_mask = non_zeros_updated
+            np_updated_zero_one_mask = non_zeros_updated # set the new mask to be the grown mask
 
             # assign 0 to -1 weight
             weight1d[indices] = 0
@@ -453,8 +453,8 @@ def weight_growing(args, name, pruned_weight_np, lower_bound_value, upper_bound_
         elif update_init_method == "kaiming":
             assert (False)
 
-        np_updated_mask = np_updated_zero_one_mask
-        updated_mask = torch.from_numpy(np_updated_mask).cuda()
+        np_updated_mask = np_updated_zero_one_mask # set the new mask to be the mask with the added growth
+        updated_mask = torch.from_numpy(np_updated_mask).cuda() # convert this to a torch tensor and move to gpu
 
         return updated_mask
 

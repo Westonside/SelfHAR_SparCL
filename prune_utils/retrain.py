@@ -57,8 +57,8 @@ class SparseTraining(object):
         self.pre_defined_mask = pre_defined_mask # as model's state_dict
         self.sparsity = self.args.retrain_mask_sparsity
         self.seed = self.args.retrain_mask_seed
-        self.sp_mask_update_freq = self.args.sp_mask_update_freq
-        self.update_init_method = self.args.sp_update_init_method
+        self.sp_mask_update_freq = self.args.sp_mask_update_freq #how frequently the mask is updated
+        self.update_init_method = self.args.sp_update_init_method # how the mask is inialized
         self.seq_gap_layer_indices = None
 
         if logger is None:
@@ -129,64 +129,72 @@ class SparseTraining(object):
         self.generate_mask(self.pre_defined_mask)
 
 
-    def apply_masks(self):
-        with torch.no_grad():
-            for name, W in (self.model.named_parameters()):
-                if name in self.masks:
-                    dtype = W.dtype
-                    W.mul_((self.masks[name] != 0).type(dtype))
+    def apply_masks(self): #this will go through the named masked 0 out some of the weights based on the mask
+        with torch.no_grad(): #disabled gradient calculation
+            for name, W in (self.model.named_parameters()): # for each name and weight
+                if name in self.masks: # if the name is in the weight is in the masked weights
+                    dtype = W.dtype # get the datatype of the weight (value win the self.masks[name] will be the weight in the mask after training
+                    W.mul_((self.masks[name] != 0).type(dtype))  #this will then multiply the weight elements wise by the binary mask which is created by comparing the value to 0 to 0 out certain values specified in the mask
                     # W.data = (W * (self.masks[name] != 0).type(dtype)).type(dtype)
                     pass
 
-    def apply_masks_on_grads(self):
+    """
+        The gradient of a weight tells how much the loss fn would change if the specific weight were to change         
+    """
+    def apply_masks_on_grads(self): # this will 0 out some of the gradients of the weights the gradient is the change in all weight in regard in change to error
         with torch.no_grad():
-            for name, W in (self.model.named_parameters()):
-                if name in self.masks:
-                    dtype = W.dtype
-                    (W.grad).mul_((self.masks[name] != 0).type(dtype))
+            for name, W in (self.model.named_parameters()): # for  each weight
+                if name in self.masks: # if the wieght is in the mask
+                    dtype = W.dtype # get teh datatype of the mask
+                    (W.grad).mul_((self.masks[name] != 0).type(dtype)) # this will 0 out the gradients  that have a 0 value in the mask
                     pass
 
-    def apply_masks_on_grads_efficient(self):
+    def apply_masks_on_grads_efficient(self): #this will 0 out gradients of weights that are in the gradient mask
         with torch.no_grad():
             for name, W in (self.model.named_parameters()):
                 if name in self.gradient_masks:
                     dtype = W.dtype
-                    (W.grad).mul_((self.gradient_masks[name] != 0).type(dtype))
+                    (W.grad).mul_((self.gradient_masks[name] != 0).type(dtype)) #0 out if it is not a 0 in the gradient mask, indicating that it is to be masked out
                     pass
 
+    """
+    This function will go through weights and 0 out the gradients that are 0 in the mask in self.maks
+    then this will get thet percentile to which gradients should be removed, it will then 0 out gradients that are below the ratio and then finally 
+    will create a new mask of the values that are above threshold, meaning that they are important to the current task and save it in the mask dictionary
+    """
     def apply_masks_on_grads_mix(self):
-        with torch.no_grad():
-            for name, W in (self.model.named_parameters()):
-                if name in self.masks:
-                    dtype = W.dtype
-                    (W.grad).mul_((self.masks[name] != 0).type(dtype))
+        with torch.no_grad(): # set no gradient claculation
+            for name, W in (self.model.named_parameters()): # go through the weights and biases for layers and zero out gradietns for masked weights
+                if name in self.masks: # if in masked
+                    dtype = W.dtype # get the data type of the weight
+                    (W.grad).mul_((self.masks[name] != 0).type(dtype)) # mask out the gradient if not 1 in the mask
             
-            for name, W in (self.model.named_parameters()):
-                if name not in self.masks:  # ignore layers that do not have rho
+            for name, W in (self.model.named_parameters()): # for each weight, get the sparsity ratio get the weights and see if the weight meets
+                if name not in self.masks:  # if not in mask
                     continue
                 # cuda_pruned_weights = None
-                percent = self.args.gradient_sparse * 100
-                weight_temp = np.abs(W.grad.cpu().detach().numpy(
+                percent = self.args.gradient_sparse * 100  # the gradient sparsity ratio
+                weight_temp = np.abs(W.grad.cpu().detach().numpy( # this will move the gradient tensor to cpu and creates a nertw tensory that is converted to numpy and then gets abs value
                 ))  # a buffer that holds weights with absolute values
-                percentile = np.percentile(
+                percentile = np.percentile( # finds a va;ie where a certain percentage of the gradients are
                     weight_temp,
                     percent)  # get a value for this percentitle
-                under_threshold = weight_temp < percentile
-                above_threshold = weight_temp > percentile
+                under_threshold = weight_temp < percentile # check if the weight meets the threshold and generates a boolean array
+                above_threshold = weight_temp > percentile # check if above threshold generates a boolean array of those above threshold
                 above_threshold = above_threshold.astype(
                     np.float32
                 )  # has to convert bool to float32 for numpy-tensor conversion
-                W.grad[under_threshold] = 0
+                W.grad[under_threshold] = 0 # this will zero out the gradients that are under the threshold for gradient sparsity THIS IS WHERE YOU REMOVE SMALLER GRADIENTS
 
                 # gradient = W.grad.data
                 # above_threshold, cuda_pruned_gradient = admm.weight_pruning(args, name, gradient, args.gradient_sparse)  # get sparse model in cuda
                 # W.grad.data = cuda_pruned_gradient  # replace the data field in variable
 
-                gradient = W.grad.cpu().detach().numpy()
-                non_zeros = gradient != 0
-                non_zeros = non_zeros.astype(np.float32)
-                zero_mask = torch.from_numpy(non_zeros).cuda()
-                self.gradient_masks[name] = zero_mask
+                gradient = W.grad.cpu().detach().numpy() # get the gradients put it on cpu and then convert numpy
+                non_zeros = gradient != 0 #get a boolean array of non zero gradients
+                non_zeros = non_zeros.astype(np.float32) # turn the boolean array to zeros [true, false] -> [1.0,0.0]
+                zero_mask = torch.from_numpy(non_zeros).cuda() # move the values indicating that a gradient is activated to gpu this will be the mask for the grads
+                self.gradient_masks[name] = zero_mask #set the gradient mask to be the mask indicating that the 1.0 values in the mask are important to the task and should not be masked
 
     def test_mask_sparsity(self, column=False, channel=False, filter=False, kernel=False):
         
@@ -197,80 +205,80 @@ class SparseTraining(object):
         total_nonzeros = 0
         layer_cont = 1
         mask = self.gradient_masks
-        for name, weight in mask.items():
-            if (len(weight.size()) == 4):# and "shortcut" not in name):
-                zeros = np.sum(weight.cpu().detach().numpy() == 0)
-                total_zeros += zeros
-                non_zeros = np.sum(weight.cpu().detach().numpy() != 0)
-                total_nonzeros += non_zeros
+        for name, weight in mask.items(): #go through all the weigts and names in the mask
+            if (len(weight.size()) == 4):# and "shortcut" not in name): # if the weight has a size of 4 meaning 4d tensor, ppossibly a conv layer?
+                zeros = np.sum(weight.cpu().detach().numpy() == 0) #get the number of values in the weight that are 0
+                total_zeros += zeros # add to the total zeros
+                non_zeros = np.sum(weight.cpu().detach().numpy() != 0) #get thee number of 0s in the weight
+                total_nonzeros += non_zeros # add the number of non zeros to the running total
                 print("(empty/total) masks of {}({}) is: ({}/{}). irregular sparsity is: {:.4f}".format(
                     name, layer_cont, zeros, zeros+non_zeros, zeros / (zeros+non_zeros)))
 
             layer_cont += 1
 
-        comp_ratio = float((total_zeros + total_nonzeros)) / float(total_nonzeros)
-        total_sparsity = total_zeros / (total_zeros + total_nonzeros)
+        comp_ratio = float((total_zeros + total_nonzeros)) / float(total_nonzeros) if layer_cont > 5 else 0.#get the ratio of non zero to 0
+        total_sparsity = total_zeros / (total_zeros + total_nonzeros) if layer_cont > 5 else 0.# get the sparsity ratio
 
         print("---------------------------------------------------------------------------")
         print("total number of zeros: {}, non-zeros: {}, zero sparsity is: {:.4f}".format(
-            total_zeros, total_nonzeros, total_zeros / (total_zeros + total_nonzeros)))
+            total_zeros, total_nonzeros, total_zeros / (total_zeros + total_nonzeros))if layer_cont > 5 else 0.)
         print("only consider conv layers, compression rate is: {:.4f}".format(
-            (total_zeros + total_nonzeros) / total_nonzeros))
+            (total_zeros + total_nonzeros) / total_nonzeros)) if layer_cont > 5 else 0.
         print("===========================================================================\n\n")
 
-        return comp_ratio, total_sparsity
+        return comp_ratio, total_sparsity #return the two ratios
         
 
     def show_masks(self, debug=False):
         with torch.no_grad():
-            if debug:
+            if debug: # if debugging
                 name = 'module.layer1.0.conv1.weight'
-                np_mask = self.masks[name].cpu().numpy()
-                np.set_printoptions(threshold=sys.maxsize)
-                print(np.squeeze(np_mask)[0], name)
+                np_mask = self.masks[name].cpu().numpy() # get the masks as a np arraay
+                np.set_printoptions(threshold=sys.maxsize) # set print options
+                print(np.squeeze(np_mask)[0], name) #squeeze the mask and print hte name
                 return
-            for name, W in self.model.named_parameters():
-                if name in self.masks:
-                    np_mask = self.masks[name].cpu().numpy()
-                    np.set_printoptions(threshold=sys.maxsize)
-                    print(np.squeeze(np_mask)[0], name)
+            for name, W in self.model.named_parameters(): # go through the weights
+                if name in self.masks: # if the name is in the mask
+                    np_mask = self.masks[name].cpu().numpy() # get the mask for the weight
+                    np.set_printoptions(threshold=sys.maxsize) # set printing options
+                    print(np.squeeze(np_mask)[0], name) #squeeze the mask
 
 
 
-    def update_mask(self, epoch, batch_idx):
+    def update_mask(self, epoch, batch_idx): #updating the mask this wil udpate the params of the mask
         # a hacky way to differenate random GaP and others
-        if not self.mask_update_decay_epoch:
-            return
-        if batch_idx != 0:
+        if not self.mask_update_decay_epoch: # if there is not a mask update decay epoch we setting this to '5-45'
+            return # don't update
+        if batch_idx != 0: # if not the first batch
             return
 
-        freq = self.sp_mask_update_freq
+        freq = self.sp_mask_update_freq # get the frequency of sparsity mask frequency (we are using 5)
 
-        bound_index = 0
+        bound_index = 0 # starting bound index
 
         try: # if mask_update_decay_epoch has only one entry
-            int(self.mask_update_decay_epoch)
+            int(self.mask_update_decay_epoch) #this will fail for '5-45' goto exception
             freq_decay_epoch = int(self.mask_update_decay_epoch)
             try: # if upper/lower bound have only one entry
                 float(self.upper_bound)
                 float(self.lower_bound)
-                upper_bound = [str(self.upper_bound)]
-                lower_bound = [str(self.lower_bound)]
-                bound_index = 0
-            except ValueError: # if upper/lower bound have multiple entries
+                upper_bound = [str(self.upper_bound)] #set the upper bound to be one value in an array
+                lower_bound = [str(self.lower_bound)] #set the lower bound in an array in itself
+                bound_index = 0 # set the bound index
+            except ValueError: # if upper/lower bound have multiple entries and cant be converted to float
                 upper_bound = self.upper_bound.split('-')  # grow-to sparsity
                 lower_bound = self.lower_bound.split('-')  # prune-to sparsity
-                if epoch >= freq_decay_epoch:
-                    freq *= 1
-                    bound_index += 1
-        except ValueError: # if mask_update_decay_epoch has multiple entries
-            freq_decay_epoch = self.mask_update_decay_epoch.split('-')
-            for i in range(len(freq_decay_epoch)):
-                freq_decay_epoch[i] = int(freq_decay_epoch[i])
+                if epoch >= freq_decay_epoch: # if the epoch is greater than or equal to the frequencydecay epoch
+                    freq *= 1 #dont change the frequency
+                    bound_index += 1 #increment the bound_index upper todo bound will say the upper bound to how much update the mask update
+        except ValueError: # if mask_update_decay_epoch has multiple entries meaning
+            freq_decay_epoch = self.mask_update_decay_epoch.split('-') # split the values
+            for i in range(len(freq_decay_epoch)):  # for each frequency decay epoch ex: '5-45' -> 5,45
+                freq_decay_epoch[i] = int(freq_decay_epoch[i]) # add the freq decay epoch todo unsure what these values are
 
             try:
-                float(self.upper_bound)
-                float(self.lower_bound)
+                float(self.upper_bound) #ex: '0.74-0.75-0.75' multiple floats goto exception
+                float(self.lower_bound) #'0.75-0.76-0.75'
                 upper_bound = [str(self.upper_bound)]
                 lower_bound = [str(self.lower_bound)]
                 bound_index = 0
@@ -278,9 +286,9 @@ class SparseTraining(object):
                 upper_bound = self.upper_bound.split('-')  # grow-to sparsity
                 lower_bound = self.lower_bound.split('-')  # prune-to sparsity
 
-                if len(freq_decay_epoch) + 1 <= len(upper_bound): # upper/lower bound num entries enough for all update
+                if len(freq_decay_epoch) + 1 <= len(upper_bound): # upper/lower bound num entries enough for all update if there are more upper boudns than frequency decay values
                     for decay in freq_decay_epoch:
-                        if epoch >= decay:
+                        if epoch >= decay: # if the decay is less than or equal to the current epoch
                             freq *= 1
                             bound_index += 1
                 else: # upper/lower bound num entries less than update needs, use the last entry to do rest updates
@@ -289,19 +297,20 @@ class SparseTraining(object):
                             freq *= 1
                             bound_index += 1
 
-        lower_bound_value = float(lower_bound[bound_index])
+        lower_bound_value = float(lower_bound[bound_index])  # you will now have a lower and upper bound
         upper_bound_value = float(upper_bound[bound_index])
 
-        if epoch % freq == 0:
+        if epoch % freq == 0: #this will run for the first epoch epoch % 5 ==0?
             '''
             calculate prune_part and grow_part for sequential GaP, if no seq_gap_layer_indices specified in yaml file,
             set prune_part and grow_part to all layer specified in yaml file as random GaP do.
+            
             '''
-            prune_part, grow_part = self.seq_gap_partition()
+            prune_part, grow_part = self.seq_gap_partition() # get the partition that can be grown and pruned
 
             with torch.no_grad():
                 sorted_to_prune = None
-                if self.args.sp_global_magnitude:
+                if self.args.sp_global_magnitude: # false in our case
                     total_size = 0
                     for name, W in (self.model.named_parameters()):
                         if (utils_pr.canonical_name(name) not in self.prune_ratios.keys()) \
@@ -320,20 +329,20 @@ class SparseTraining(object):
                     sorted_to_prune = np.sort(to_prune)
 
                 # import pdb; pdb.set_trace()
-                for name, W in (self.model.named_parameters()):
-                    if (utils_pr.canonical_name(name) not in self.prune_ratios.keys()) and (name not in self.prune_ratios.keys()):
+                for name, W in (self.model.named_parameters()): # go through the weights
+                    if (utils_pr.canonical_name(name) not in self.prune_ratios.keys()) and (name not in self.prune_ratios.keys()): # if the weight is in the prune keys
                         continue
 
-                    weight = W.cpu().detach().numpy()
-                    weight_current_copy = copy.copy(weight)
+                    weight = W.cpu().detach().numpy() # if so put into cpu
+                    weight_current_copy = copy.copy(weight) # copy the weight
 
 
-                    non_zeros = weight != 0
-                    non_zeros = non_zeros.astype(np.float32)
-                    num_nonzeros = np.count_nonzero(non_zeros)
-                    total_num = non_zeros.size
-                    sparsity = 1 - (num_nonzeros * 1.0) / total_num
-                    np_orig_mask = self.masks[name].cpu().detach().numpy()
+                    non_zeros = weight != 0 # set the non zero values to where they are not 0 bool array
+                    non_zeros = non_zeros.astype(np.float32) #convert the non_zero values to an array of floats so 1 if true 0 if false
+                    num_nonzeros = np.count_nonzero(non_zeros) # get the count of non zero vlaues
+                    total_num = non_zeros.size # get the number of values in the weight
+                    sparsity = 1 - (num_nonzeros * 1.0) / total_num # use this to calculate sparsity (percentage of weights that are non zero)
+                    np_orig_mask = self.masks[name].cpu().detach().numpy() # take the original mask
 
                     print(("\n==> BEFORE UPDATE: {}: {}, {}, {}".format(name,
                                                                     str(num_nonzeros),
@@ -342,37 +351,37 @@ class SparseTraining(object):
 
                     ############## pruning #############
                     pruned_weight_np = None
-                    if name in prune_part:
-                        sp_admm_sparsity_type_copy = copy.copy(self.args.sp_admm_sparsity_type)
-                        sparsity_type_list = (self.args.sp_admm_sparsity_type).split("+")
+                    if name in prune_part: # if the current weight is in the to prune partition
+                        sp_admm_sparsity_type_copy = copy.copy(self.args.sp_admm_sparsity_type) #create a copy of the sparsity type we are using 'irregular'
+                        sparsity_type_list = (self.args.sp_admm_sparsity_type).split("+") #split on the + if you have multiple types
                         for i in range(len(sparsity_type_list)):
-                            sparsity_type = sparsity_type_list[i]
+                            sparsity_type = sparsity_type_list[i] # in our case only have one sparsity type of irregular
                             print("* sparsity type {} is {}".format(i, sparsity_type))
-                            self.args.sp_admm_sparsity_type = sparsity_type
-
-                            pruned_mask, pruned_weight = weight_pruning(self.args,
-                                                                        self.configs,
+                            self.args.sp_admm_sparsity_type = sparsity_type # set the sparsity weight
+                            # this will get a pruned mask that indicate values over and under the prune ratio andd the pruned weight
+                            pruned_mask, pruned_weight = weight_pruning(self.args, # this will prune the weight using the lower bound value and the sparsity type
+                                                                        self.configs, #prune the weight
                                                                         name,
                                                                         W,
-                                                                        lower_bound_value)
-                            self.args.sp_admm_sparsity_type = sp_admm_sparsity_type_copy
+                                                                        lower_bound_value) # the lower bound value is used to inform the percentile that every weight must be equal to or above to not be pruned
+                            self.args.sp_admm_sparsity_type = sp_admm_sparsity_type_copy # set the sparsity type to be the copy of the copy
                             # pruned_mask_np = pruned_mask.cpu().detach().numpy()
-                            pruned_weight_np = pruned_weight.cpu().detach().numpy()
+                            pruned_weight_np = pruned_weight.cpu().detach().numpy() # detach the pruned weight that was returned
 
-                            W.mul_(pruned_mask.cuda())
+                            W.mul_(pruned_mask.cuda()) #multiply the weight so that the values above the percentile (0.75) are kept and the others under are removed
 
 
-                            non_zeros_prune = pruned_weight_np != 0
-                            num_nonzeros_prune = np.count_nonzero(non_zeros_prune.astype(np.float32))
-                            print(("==> PRUNE: {}: {}, {}, {}".format(name,
+                            non_zeros_prune = pruned_weight_np != 0 # get the number of values that are not pruned
+                            num_nonzeros_prune = np.count_nonzero(non_zeros_prune.astype(np.float32)) # count the number of non zero values
+                            print(("==> PRUNE: {}: {}, {}, {}".format(name, # print the sparsity
                                                              str(num_nonzeros_prune),
                                                              str(total_num),
                                                              str(1 - (num_nonzeros_prune * 1.0) / total_num))))
 
-                            self.masks[name] = pruned_mask.cuda()
+                            self.masks[name] = pruned_mask.cuda() # udpate the mask to the one that was returned
 
 
-                            if self.args.gradient_efficient:
+                            if self.args.gradient_efficient: # in our case this is not used
                                 new_lower_bound_value = lower_bound_value + self.args.gradient_remove
                                 pruned_mask, pruned_weight = weight_pruning(self.args,
                                                                             self.configs,
@@ -383,9 +392,9 @@ class SparseTraining(object):
 
 
                     ############## growing #############
-                    if name in grow_part:
-                        if pruned_weight_np is None: # use in seq gap
-                            pruned_weight_np = weight_current_copy
+                    if name in grow_part: # if the weight is in the growing part
+                        if pruned_weight_np is None: # use in seq gap we have a pruned_weight_np in epoch 0
+                            pruned_weight_np = weight_current_copy # set a pruned weight if no pruning happened for the weight
 
                         updated_mask = weight_growing(self.args,
                                                       name,
@@ -393,7 +402,7 @@ class SparseTraining(object):
                                                       lower_bound_value,
                                                       upper_bound_value,
                                                       self.update_init_method)
-                        self.masks[name] = updated_mask
+                        self.masks[name] = updated_mask # set the updated mask to be new mask with the grown indicies added in
                         pass
 
 
@@ -430,14 +439,14 @@ class SparseTraining(object):
         grow_part = []
 
         if self.seq_gap_layer_indices is None: # Random Gap: add all layer name in prune part and grow part list
-            for name, _ in self.model.named_parameters():
-                if (utils_pr.canonical_name(name) not in self.prune_ratios.keys()) and (name not in self.prune_ratios.keys()):
-                    continue
-                prune_part.append(name)
-                grow_part.append(name)
+            for name, _ in self.model.named_parameters(): # go through the name parameters
+                if (utils_pr.canonical_name(name) not in self.prune_ratios.keys()) and (name not in self.prune_ratios.keys()): # if the name is not in the prune keys then you will skip it
+                    continue # this will see if the value is in the prune values which is specified in the yaml file
+                prune_part.append(name) # if the name is in the prune keyts add to prune
+                grow_part.append(name)  # add to the grow partition as well
         else: # Sequential gap One-run: partition model
             all_update_layer_name = []
-            for name, _ in self.model.named_parameters():
+            for name, _ in self.model.named_parameters(): # go thorugh all values j
                 if (utils_pr.canonical_name(name) not in self.prune_ratios.keys()) and (name not in self.prune_ratios.keys()):
                     continue
                 all_update_layer_name.append(name)
@@ -455,37 +464,37 @@ class SparseTraining(object):
 
             (self.all_part_name_list).append(to_grow)
 
-        return prune_part, grow_part
+        return prune_part, grow_part # this will return the layers that can be prune and grown
 
 
 
     def generate_mask(self, pre_defined_mask=None):
         masks = {}
         # import pdb; pdb.set_trace()
-        if self.pattern == 'weight':
+        if self.pattern == 'weight': # if the pattern is off weight
 
 
-            with torch.no_grad():
-                for name, W in (self.model.named_parameters()):
+            with torch.no_grad(): #disasble gradients
+                for name, W in (self.model.named_parameters()): # for each weight
 
-                    if (utils_pr.canonical_name(name) not in self.masked_layers) and (name not in self.masked_layers):
+                    if (utils_pr.canonical_name(name) not in self.masked_layers) and (name not in self.masked_layers): # skip of tthe name is not in the masked layeres
                         continue
 
-                    weight = W.cpu().detach().numpy()
-                    non_zeros = weight != 0
-                    non_zeros = non_zeros.astype(np.float32)
-                    num_nonzeros = np.count_nonzero(non_zeros)
-                    total_num = non_zeros.size
-                    sparsity = 1 - (num_nonzeros * 1.0) / total_num
+                    weight = W.cpu().detach().numpy() # get the weight tensor
+                    non_zeros = weight != 0 # gett the number of non-zero values in the weight
+                    non_zeros = non_zeros.astype(np.float32)  # turn the boolean array to a float array
+                    num_nonzeros = np.count_nonzero(non_zeros) # get the count of non zero values int the float array
+                    total_num = non_zeros.size # get the number of zeros
+                    sparsity = 1 - (num_nonzeros * 1.0) / total_num # calcualte the sparsity
                     #self.logger.info("{}: {}, {}, {}".format(name, str(num_nonzeros), str(total_num), str(sparsity)))
                     print(("{}: {}, {}, {}".format(name, str(num_nonzeros), str(total_num), str(sparsity))))
                     if sparsity < 0.1:
                         #self.logger.info("{}: sparsity too low, skip".format(name))
                         print("{}: sparsity too low, skip".format(name))
                         continue
-                    zero_mask = torch.from_numpy(non_zeros).cuda()
+                    zero_mask = torch.from_numpy(non_zeros).cuda() # set the non zeros to gpu
 
-                    self.masks[name] = zero_mask
+                    self.masks[name] = zero_mask # set the mask for the weight 
 
             #for name in masks:
             #    print("Current mask includes:", name)

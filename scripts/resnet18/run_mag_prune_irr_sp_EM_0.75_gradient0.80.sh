@@ -22,7 +22,7 @@ RM_EPOCH=20
 
 SAVE_FOLDER="checkpoints/resnet18/paper/gradient_effi/mutate_irr/${DATASET}/buffer_${BUFFER_SIZE}/"
 
-PATH_TO_SPARCL=/home/zhan.zhe/SparCL # change to your own path
+PATH_TO_SPARCL=/home/wmt2/SelfHAR_SparCL # change to your own path
 cd $PATH_TO_SPARCL
 
 mkdir -p ${SAVE_FOLDER}

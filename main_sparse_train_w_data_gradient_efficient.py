@@ -10,9 +10,9 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 import pickle
 import copy
-
+from datasets.hhar_features import SequentialHHAR
 import time
-
+from models.in_out_model import InOut
 # from models.resnet32_cifar10_grasp import resnet32
 # from models.vgg_grasp import vgg19, vgg16
 # from models.resnet20_cifar import resnet20
@@ -149,41 +149,135 @@ parser.add_argument('--keep-lowest-n', type=int, default=0,
                     help='number of sorted examples to keep that have the lowest score, equivalent to start index of removal, if a negative number given, remove random draw of examples')
 parser.add_argument('--sorting-file', type=str, default=None, help='input file name for sorted pkl file')
 parser.add_argument('--input-dir', type=str, default=".", help='input dir for sorted pkl file')
+parser.add_argument('--is-two-dim', type=bool, default=False, help='indicate if data is 2D or not')
 
 prune_parse_arguments(parser)
-args = parser.parse_args()
+# args = parser.parse_args()
+
+test_har = True
+
+args = argparse.Namespace(
+    arch= 'simple' if test_har  else 'resnet',
+    # arch='resnet',
+    shuffle= True if test_har else False,
+    depth=18,
+    workers=4,
+    multi_gpu=False,
+    s=0.0001,
+    batch_size=32,
+    test_batch_size=256,
+    epochs=250,
+    optmzr='sgd',
+    lr=0.03,
+    lr_decay=60,
+    momentum=0.9,
+    weight_decay=0.0001,
+    no_cuda=False,
+    seed=888,
+    lr_scheduler='cosine',
+    warmup=False,
+    warmup_lr=0.0001,
+    warmup_epochs=0,
+    mixup=False,
+    alpha=0.3,
+    smooth=False,
+    smooth_eps=0.0,
+    log_interval=10,
+    rho=0.0001,
+    pretrain_epochs=0,
+    pruning_epochs=0,
+    remark='irr_0.75_mut',
+    save_model='checkpoints/resnet18/paper/gradient_effi/mutate_irr/seq-cifar10/buffer_500/',
+    sparsity_type='random-pattern',
+    config_file='config_vgg16',
+    use_cl_mask=True,
+    buffer_size=500,
+    buffer_weight=0.1,
+    buffer_weight_beta=0.5,
+    # dataset='seq-cifar10',
+    dataset='hhar_features' if test_har else 'seq-cifar10',
+    validation=True,
+    test_epoch_interval=1,
+    evaluate_mode=False,
+    eval_checkpoint=None,
+    gradient_efficient=False,
+    gradient_efficient_mix=True,
+    gradient_remove=0.1,
+    gradient_sparse=0.8,
+    sample_frequency=30,
+    replay_method='derpp',
+    patternNum=8,
+    rand_seed=False,
+    log_filename='checkpoints/resnet18/paper/gradient_effi/mutate_irr/seq-cifar10/buffer_500//seed_888_75_derpp_0.80.txt',
+    resume=None,
+    save_mask_model=False,
+    mask_sparsity=None,
+    output_dir='checkpoints/resnet18/paper/gradient_effi/mutate_irr/seq-cifar10/buffer_500/',
+    output_name='irr_0.75_mut_RM_3000_20',
+    remove_data_epoch=20,
+    data_augmentation=False,
+    remove_n=3000,
+    keep_lowest_n=0,
+    sorting_file=None,
+    input_dir='.',
+    sp_retrain=True,
+    sp_config_file='./profiles/resnet18_cifar/irr/in_out_0.75.yaml' if test_har else  './profiles/resnet18_cifar/irr/resnet18_0.75.yaml',
+    sp_no_harden=False,
+    sp_admm_sparsity_type='irregular',
+    sp_load_frozen_weights=None,
+    retrain_mask_pattern='weight',
+    sp_update_init_method='zero',
+    sp_mask_update_freq=5,
+    sp_lmd=0.5,
+    retrain_mask_sparsity=-1.0,
+    retrain_mask_seed=None,
+    sp_prune_before_retrain=True,
+    output_compressed_format=False,
+    sp_grad_update=False,
+    sp_grad_decay=0.98,
+    sp_grad_restore_threshold=-1,
+    sp_global_magnitude=False,
+    sp_pre_defined_mask_dir=None,
+    upper_bound='0.74-0.75-0.75',
+    lower_bound='0.75-0.76-0.75',
+    mask_update_decay_epoch='5-45',
+    cuda=True
+)
 
 # torch.backends.cudnn.deterministic = True
 # torch.backends.cudnn.benchmark = False
 
-args.cuda = not args.no_cuda and torch.cuda.is_available()
+args.cuda = not args.no_cuda and torch.cuda.is_available() # see if the cuda core is available
 
-if args.rand_seed:
-    seed = random.randint(1, 999)
+if args.rand_seed: # if there is a random seed passed
+    seed = random.randint(1, 999) # generate one
     print("Using random seed:", seed)
 else:
-    seed = args.seed
+    seed = args.seed #other wise use a manual seed
     torch.manual_seed(seed)
     if args.cuda:
-        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed(seed) #set the cuda manual seed
     print("Using manual seed:", seed)
 
-if not os.path.exists(args.save_model):
-    os.makedirs(args.save_model)
+if not os.path.exists(args.save_model): # if there is not a save model path
+    os.makedirs(args.save_model) #create one
 
 kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
-
+is_two_dim = False
 
 class CrossEntropyLossMaybeSmooth(nn.CrossEntropyLoss):
     ''' Calculate cross entropy loss, apply label smoothing if needed. '''
 
+
     def __init__(self, smooth_eps=0.0):
         super(CrossEntropyLossMaybeSmooth, self).__init__()
         self.smooth_eps = smooth_eps
+        # the smooth_eps represents the label smoothign factor determining how much smoothing is applied to one hot encoded labels
+        #make the one hot encoding more smooth by reducing the one hot encoding labeles of: [0, 1, 0, 0] -> [0.05, 0.9, 0.05, 0.05]
 
     def forward(self, output, target, smooth=False):
         if not smooth:
-            return F.cross_entropy(output, target)
+            return F.cross_entropy(output, target) # if there is no smoothing then just return the cross entropy loss
 
         target = target.contiguous().view(-1)
         n_class = output.size(1)
@@ -198,13 +292,13 @@ def mixup_data(x, y, alpha=1.0):
 
     '''Compute the mixup data. Return mixed inputs, pairs of targets, and lambda'''
     if alpha > 0.0:
-        lam = np.random.beta(alpha, alpha)
+        lam = np.random.beta(alpha, alpha) # draw random samples from a beta distribution
     else:
         lam = 1.0
 
-    batch_size = x.size()[0]
-    index = torch.randperm(batch_size).cuda()
-
+    batch_size = x.size()[0] #the size of the input
+    index = torch.randperm(batch_size).cuda() # create a random permutation of the batch this will create a random sequence of numbers 0-batchsuize-1 then moves the tensor to gpu memory
+    # a tensor can have n dimensions so a vector is just a 1d tensor
     mixed_x = lam * x + (1 - lam) * x[index,:]
     y_a, y_b = y, y[index]
     return mixed_x, y_a, y_b, lam
@@ -252,8 +346,8 @@ class GradualWarmupScheduler(_LRScheduler):
             return super(GradualWarmupScheduler, self).step(epoch)
 
 
-def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, dataset,
-    example_stats_train, train_indx, maskretrain, masks, cl_mask=None):
+def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, dataset, # t is the task id in the dataset
+    example_stats_train, train_indx, maskretrain, masks, cl_mask=None, task_dict=None):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -265,56 +359,63 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
     # switch to train mode
     model.train()
 
+    valid = {}
+
     # Get permutation to shuffle trainset
     trainset_permutation_inds = npr.permutation(
         np.arange(len(trainset.targets)))   #numpy random permutation
     batch_size = args.batch_size
     end = time.time()
-    for batch_idx, batch_start_ind in enumerate(
+    for batch_idx, batch_start_ind in enumerate( # go through the training set using the bath size and batch index
             range(0, len(trainset.targets), batch_size)):
         data_time.update(time.time() - end)
 
         # prune_update_learning_rate(optimizer, epoch, args)
 
         # Get trainset indices for batch
-        batch_inds = trainset_permutation_inds[batch_start_ind:
+        batch_inds = trainset_permutation_inds[batch_start_ind: #get the indicies of the batch that have been randomly permuted
                                                batch_start_ind + batch_size]
         if len(batch_inds) < args.batch_size:
             continue
         # Get batch inputs and targets, transform them appropriately
         transformed_trainset = []
         not_transformed_trainset = []
-        for ind in batch_inds:
+        for ind in batch_inds: # go through the batch indicies
             transformed_trainset.append(trainset.__getitem__(ind)[0])
             not_transformed_trainset.append(trainset.__getitem__(ind)[2])
-        inputs = torch.stack(transformed_trainset)
-        not_transformed_inputs = torch.stack(not_transformed_trainset)
-        targets = torch.LongTensor(np.array(trainset.targets)[batch_inds].tolist())
+        inputs = torch.stack(transformed_trainset) # this stacks the transformed data in all batches you will have a list of 32 indicies that point to somehwhere in the data converts it to a tensor of 32x96
+        not_transformed_inputs = torch.stack(not_transformed_trainset) # this stacks the tranformed and non trasnformed samples per batch
+        targets = torch.LongTensor(np.array(trainset.targets)[batch_inds].tolist()) # turn targets to a tensor
 
         # Map to available device
-        inputs = inputs.cuda(non_blocking=True)
-        targets = targets.cuda(non_blocking=True)
+        inputs = inputs.cuda(non_blocking=True) # move to gpu
+        targets = targets.cuda(non_blocking=True) # move to gpu
         if args.mixup:
             inputs, target_a, target_b, lam = mixup_data(inputs, targets, args.alpha)
 
 
         # Forward propagation, compute loss, get predictions
         # add buffer here
-        if (not buffer is None) and (not buffer.is_empty()) and t > 0:
-            if args.replay_method == "er":
+        #not giving the 96 features to the resnset
+        # print(model)
+        # for name, param in model.named_parameters():
+        #     print(param.requires_grad, name)
+        # exit(1)
+        if (not buffer is None) and (not buffer.is_empty()) and t > 0: # if the buffer is not empty or not the first task
+            if args.replay_method == "er": # if you have "er" replay not sure what that is (we use derpp)
                 buf_inputs, buf_labels = buffer.get_data(
                     args.batch_size, transform=dataset.get_transform())
                 if not args.merge_batch or (t == 0):
                     # compute output
-                    outputs = model(inputs)
+                    outputs = model(inputs) # get the outputs for the model
                     # add CL per task mask
                     if cl_mask is not None:
-                        mask_add_on = torch.zeros_like(outputs)
-                        mask_add_on[:, cl_mask] = float('-inf')
-                        cl_masked_output = outputs + mask_add_on
-                        ce_loss = criterion(cl_masked_output, targets)
-                    else:
-                        ce_loss = criterion(outputs, targets)   
+                        mask_add_on = torch.zeros_like(outputs) # create a mask of zeros like the outputs tensor
+                        mask_add_on[:, cl_mask] = float('-inf') # change the mask up to cl_mask which may be a list of indicies or a single index to be negatve infinity
+                        cl_masked_output = outputs + mask_add_on # apply the mask to the outputs, setting certain elements values to negative infinity
+                        ce_loss = criterion(cl_masked_output, targets) # the loss is set to the critear applied on the masked outputs using the targets
+                    else: # if there is no masking
+                        ce_loss = criterion(outputs, targets)   # if no mask then just claculate the cross entropy loss
                     # do an additional forward
                         # print("Buffer training!")
                     buf_output = model(buf_inputs)
@@ -324,14 +425,14 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                     ce_loss += args.buffer_weight * buf_ce_loss
                 else:
                     assert buffer is not None, "merge batch is not available when buffer is None!"
-                    cat_inputs = torch.cat([inputs, buf_inputs], dim=0)
-                    cat_targets = torch.cat([targets, buf_labels])
+                    cat_inputs = torch.cat([inputs, buf_inputs], dim=0) #combine the inputs
+                    cat_targets = torch.cat([targets, buf_labels]) #combine the targets and the buffer labels
                     # compute output
-                    cat_outputs = model(cat_inputs)
+                    cat_outputs = model(cat_inputs) # compute output
                     # make sure only count non-buffer data
                     outputs = cat_outputs[:args.batch_size]
                     # add CL per task mask
-                    if cl_mask is not None:
+                    if cl_mask is not None: #this takes the outputs and then masks up to the batch size
                         mask_add_on = torch.zeros_like(cat_outputs)
                         # only add mask for the first half of batch
                         mask_add_on[:args.batch_size, cl_mask] = float('-inf')
@@ -343,18 +444,18 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
 
             else: # if using der or derpp
                 # compute output
-                outputs = model(inputs)
+                outputs = model(inputs) # predict on  the passed in inputs will have probability distribution for prediction
                 # add CL per task mask
-                if cl_mask is not None:
-                    mask_add_on = torch.zeros_like(outputs)
-                    mask_add_on[:, cl_mask] = float('-inf')
-                    cl_masked_output = outputs + mask_add_on
-                    ce_loss = criterion(cl_masked_output, targets)
+                if cl_mask is not None: # if you have a cl mask then mask the other classes not used in this prediction
+                    mask_add_on = torch.zeros_like(outputs) # make a tensor of 0s of len outputs
+                    mask_add_on[:, cl_mask] = float('-inf') # set the classes not used in the taks to be negative infinity
+                    cl_masked_output = outputs + mask_add_on # apply the mask
+                    ce_loss = criterion(cl_masked_output, targets) # calculate the loss for the classes in the current task
                 else:
                     ce_loss = criterion(outputs, targets)
                 # print(inputs.shape)
 
-                if args.replay_method == "der":
+                if args.replay_method == "der": # if you are using der
                     buf_inputs, buf_logits = buffer.get_data(
                         args.batch_size, transform=dataset.get_transform())
                     buf_output = model(buf_inputs)
@@ -364,103 +465,102 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                     # buf_mse_loss = buf_mse_loss.mean()
                     ce_loss += args.buffer_weight * buf_mse_loss
 
-                elif args.replay_method == "derpp":
-                    buf_inputs, _, buf_logits = buffer.get_data(
-                        args.batch_size, transform=dataset.get_transform())
-                    buf_output = model(buf_inputs)
+                elif args.replay_method == "derpp":  #if you are using der++ this is our case you classify and get loss baesd off past predictions compared to current and then try to clasiify past tasks
+                    buf_inputs, _, buf_logits = buffer.get_data( # get the input data and the past logits from the buffer
+                        args.batch_size, transform=dataset.get_transform()) #you will try to get get your logits as close as possible to the logits in the buffer (regularizes) want to predict similarly to past predictions to preserve prediction
+                    buf_output = model(buf_inputs) # predict on the past inputs in the buffer
                     # print(buf_inputs.shape)
-                    buf_mse_loss = F.mse_loss(buf_output, buf_logits, reduction="none")
-                    buf_mse_loss = torch.mean(buf_mse_loss, axis=-1)
+                    buf_mse_loss = F.mse_loss(buf_output, buf_logits, reduction="none") # caculate the loss based on the difference between the two sets of logits
+                    buf_mse_loss = torch.mean(buf_mse_loss, axis=-1) # calculate the mean loss for the predictions
                     # print(ce_loss.shape, buf_mse_loss.shape)
                     
                     # ce_loss = ce_loss.mean()
                     # buf_mse_loss = buf_mse_loss.mean()
-                    ce_loss += args.buffer_weight * buf_mse_loss
+                    ce_loss += args.buffer_weight * buf_mse_loss # now multiply the loss by a value that we set that indicates how much we care about predicting close to past predictions in our case 0.1
 
-                    buf_inputs, buf_labels, _ = buffer.get_data(
+                    buf_inputs, buf_labels, _ = buffer.get_data( # now  you will get new buffer input values and the class labels
                         args.batch_size, transform=dataset.get_transform())
                     # print(buf_inputs.shape)
-                    buf_output = model(buf_inputs)
-                    buf_ce_loss = criterion(buf_output, buf_labels)
+                    buf_output = model(buf_inputs) # you will predict on this input
+                    buf_ce_loss = criterion(buf_output, buf_labels) # now you will calculate the loss by comparing the output to the class labels
                     # print(ce_loss.shape, buf_ce_loss.shape)
                     # exit(0)
                     # buf_ce_loss = buf_ce_loss.mean()
-                    ce_loss += args.buffer_weight_beta * buf_ce_loss
+                    ce_loss += args.buffer_weight_beta * buf_ce_loss # now you will caculate the loss using the beta value to specify how much you care about correct class predictions on past exmaples
                 
         else: # no replay
             # compute output
-            outputs = model(inputs)
+            outputs = model(inputs) #get the ouput of the model
             # add CL per task mask
-            if cl_mask is not None:
-                mask_add_on = torch.zeros_like(outputs)
-                mask_add_on[:, cl_mask] = float('-inf')
-                cl_masked_output = outputs + mask_add_on
-                ce_loss = criterion(cl_masked_output, targets)
+            if cl_mask is not None: #this will mask the outputs for the classes not involved in the current tasks
+                mask_add_on = torch.zeros_like(outputs) #creates zero tensor of size output
+                mask_add_on[:, cl_mask] = float('-inf') #mask the predictions for the classes not in the task
+                cl_masked_output = outputs + mask_add_on # now perform the masking of the outputs for the other classes
+                ce_loss = criterion(cl_masked_output, targets) # calculate the loss
             else:
                 ce_loss = criterion(outputs, targets)
-        loss = ce_loss
-
+        loss = ce_loss # set the loss
+        # your loss will be the loss per item in the batch
 
         # loss = criterion(outputs, targets)
-        _, predicted = torch.max(outputs.data, 1)
+        _, predicted = torch.max(outputs.data, 1) # get the prediction label for all predictions in the batch
 
         # Update statistics and loss
-        acc = predicted == targets
+        acc = predicted == targets # get the predictions and see where the prediction was correct
 
-        for j, index in enumerate(batch_inds):
-
-            # Get index in original dataset (not sorted by forgetting)
-            index_in_original_dataset = train_indx[index]
-
+        for j, index in enumerate(batch_inds): # go through the batch using batch and batch index batch inds being the position in the data where for the batch permuatation
+            # go through each batch and find the most incorrectly predicted in the batch
+            # Get index in original dataset (not sorted by forgetting) YOU ARE GOING THROUGH SAMPLES
+            index_in_original_dataset = train_indx[index] # get the index in the non permuted dataset
+            # INDEX WILL BE AN ARR containing indicies to samples in the data for the current batch
             # Compute missclassification margin
-            output_correct_class = outputs.data[j, targets[j].item()]
-            sorted_output, _ = torch.sort(outputs.data[j, :])
-            if acc[j]:
+            output_correct_class = outputs.data[j, targets[j].item()] # get all the correct classes for the batch
+            sorted_output, _ = torch.sort(outputs.data[j, :]) # sort the outputs for a given batch
+            if acc[j]: # if correct prediction
                 # Example classified correctly, highest incorrect class is 2nd largest output
-                output_highest_incorrect_class = sorted_output[-2]
-            else:
+                output_highest_incorrect_class = sorted_output[-2] #if the prediction was correct for this, it will be the most predicted so get the second most predicted
+            else: # incorrect prediction
                 # Example misclassified, highest incorrect class is max output
                 output_highest_incorrect_class = sorted_output[-1]
-            margin = output_correct_class.item(
+            margin = output_correct_class.item( # calcualte the margin between the correct predictions and incorrect
             ) - output_highest_incorrect_class.item()
 
             # Add the statistics of the current training example to dictionary
-            index_stats = example_stats_train.get(index_in_original_dataset,
+            index_stats = example_stats_train.get(index_in_original_dataset, # add the stats in the
                                             [[], [], []])
 
-            index_stats[0].append(loss[j].item())
-            index_stats[1].append(acc[j].sum().item())
-            index_stats[2].append(margin)
-            example_stats_train[index_in_original_dataset] = index_stats
-
+            index_stats[0].append(loss[j].item()) # add the loss for the item to the first arr
+            index_stats[1].append(acc[j].sum().item()) # add the accuracy summed to teh second
+            index_stats[2].append(margin) # add the tird to the final j
+            example_stats_train[index_in_original_dataset] = index_stats # then set the stats for this sample within the current batch to the index in the original dataset
         # Update loss, backward propagate, update optimizer
         #print('inside len(example_stats_train)',len(example_stats_train))
 
         # losses.update(loss.item(), inputs.size(0))
 
 
-        loss = loss.mean()
-        train_loss += loss.item()
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-        loss.backward()
-        if args.gradient_efficient:
+        loss = loss.mean() # get the mean of the loss for all batches
+        train_loss += loss.item() #add the loss to the training loss
+        total += targets.size(0) # add batch size to the total this represents the total seen inputs
+        correct += predicted.eq(targets.data).cpu().sum() #add the total correct predictions for this batch to the counter
+        loss.backward() # backpropagate the loss
+        if args.gradient_efficient: # if grad efficient
             prune_apply_masks_on_grads_efficient()
-        elif args.gradient_efficient_mix:
-            if batch_idx % args.sample_frequency == 0:
-                prune_apply_masks_on_grads_mix()
+        elif args.gradient_efficient_mix: # if mixed grad efficient
+            if batch_idx % args.sample_frequency == 0: # if the batch idx is divisble by the sample frequency
+                prune_apply_masks_on_grads_mix() # this will mask gradients for masked weights then it will mask gradients below the 80th percentile and create a gradient mask that is used in apply gradients efficient to reduce computation
             else:
-                prune_apply_masks_on_grads_efficient()
+                prune_apply_masks_on_grads_efficient() #this will apply the gradient mask made in the prune apply masks on grads mix
         else:
             prune_apply_masks_on_grads()
-        optimizer.step()
+        optimizer.step() # step the learning rate optimizer
 
-        if batch_idx != (len(trainset) // batch_size) - 1:
-            optimizer.zero_grad()
-        prune_apply_masks()
+        if batch_idx != (len(trainset) // batch_size) - 1: # if the current batch is this value
+            optimizer.zero_grad() # set the optimizer to be zero grade
+        prune_apply_masks() # now prune apply the masks
 
-        batch_time.update(time.time() - end)
-        end = time.time()
+        batch_time.update(time.time() - end) # get the batch time
+        end = time.time() # get the end
 
         # Add training accuracy to dict
         index_stats = example_stats_train.get('train', [[], []])
@@ -476,9 +576,11 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         elif args.replay_method == 'derpp':
             buffer.add_data(examples=not_transformed_inputs, labels=targets, logits=outputs.data)
 
-        if batch_idx % 10 == 0:
-            for param_group in optimizer.param_groups:
+        if batch_idx % 10 == 0: # if the batch index is divisble by 10
+            for param_group in optimizer.param_groups: # set the param group
                 current_lr = param_group['lr']
+
+        # at the end of each batch you can run your validation function
 
             print('Epoch: [{0}][{1}/{2}]\t'
                   'LR: {3:.5f}\t'
@@ -493,6 +595,8 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                     batch_time=batch_time,
                     data_time=data_time
             ))
+    # at the end of epoch you will perform your validation
+
 
 
 class AverageMeter(object):
@@ -542,7 +646,62 @@ def mask_classes(outputs, dataset, k):
     outputs[:, 0:k * dataset.N_CLASSES_PER_TASK] = -float('inf')
     outputs[:, (k + 1) * dataset.N_CLASSES_PER_TASK:
                dataset.N_TASKS * dataset.N_CLASSES_PER_TASK] = -float('inf')
-            
+
+'''
+    Impl Notes: In order to monitor forgetting I am conducting my validation on all tasks 
+'''
+def validation(model,dataset, epoch, task, task_dict):
+    model.eval() # turn on evaluate model
+    task_dict[task] = {epoch : {"individual": []}} # in the dict at the task value is a value for the epoch
+    with torch.no_grad():
+        total_correct = 0
+        total_loss = 0
+        for t in range(dataset.N_TASKS):
+            cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (t + 1) * dataset.N_CLASSES_PER_TASK)
+            # task_valid_loss = 0
+            correct = 0
+            # add the data if class belongs to the current class
+            task_class_vals = np.where(np.isin(dataset.validation[1], cur_classes)) #get the indicies where they are in the task
+            print('testing')
+            data, label = torch.tensor(dataset.validation[0][task_class_vals]).cuda(), torch.tensor(dataset.validation[1][task_class_vals]).cuda()
+            output = model(data)
+            criterion = nn.CrossEntropyLoss()
+
+            task_valid_loss = criterion(output,label).item()
+            total_loss += task_valid_loss
+
+            pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
+
+            correct += pred.eq(label.data.view_as(pred)).cpu().sum().item()
+            total_correct += correct # add the total correct to the total
+
+            task_acc = (float(correct)/np.size(task_class_vals[0])) * 100.
+            cur_task_epoch_task = {
+                "task": t,
+                "task_validation_loss": task_valid_loss,
+                "task_accuracy": task_acc,
+                "correct": correct,
+            }
+
+            task_dict[task][epoch]["individual"].append(cur_task_epoch_task)
+
+        total_acc = float(total_correct)/float(len(dataset.validation[1])) * 100.
+        task_dict[task][epoch]["overall"] = {
+            "total_validation_accuracy": total_acc,
+            "total_loss": total_loss,
+            "total_correct": total_correct,
+        }
+    print("=" *110, f"Total validation loss: {total_loss}\n")
+
+
+
+
+
+
+
+
+    model.train() # set back to training mode
+
 
 def test(model, dataset):
     model.eval()
@@ -554,7 +713,10 @@ def test(model, dataset):
             correct = 0
             til_correct = 0
             for data in test_loader:
-                img, target = data
+                if is_two_dim:
+                    img, target, _ = data
+                else:
+                    img, target = data
                 # print(f"\tTest classes"+str(np.unique(target)))
                 if args.cuda:
                     img, target = img.cuda(), target.cuda()
@@ -590,14 +752,17 @@ def evaluate(model, dataset, last=False):
     """
     model.eval()
     accs = np.zeros((dataset.N_TASKS, ))
-    accs_mask_classes = np.zeros((dataset.N_TASKS, ))
+    accs_mask_classes = np.zeros((dataset.N_TASKS,))
     for k, test_loader in enumerate(dataset.test_loaders):
         if last and k < len(dataset.test_loaders) - 1:
             continue
         correct, correct_mask_classes, total = 0.0, 0.0, 0.0
         for data in test_loader:
             with torch.no_grad():
-                inputs, labels = data
+                if len(data) == 3:
+                    inputs,labels, _ = data
+                else:
+                    inputs, labels = data
                 inputs, labels = inputs.cuda(), labels.cuda()
                 # if 'class-il' not in model.COMPATIBILITY:
                 #     outputs = model(inputs, k)
@@ -681,7 +846,7 @@ def sort_examples_by_forgetting(unlearned_per_presentation_all,
         example_original_order.append(example_id)
         example_stats.append(0)
 
-        # Iterate over all training runs to calculate the total forgetting count for current example
+        # Iterate over all training runs to calculate the total forgetting count for current example (presentation is continuous learning where you add in new ones)
         for i in range(len(unlearned_per_presentation_all)):
 
             # Get all presentations when current example was forgotten during current training run
@@ -744,6 +909,8 @@ def main():
                 model = resnet32(depth=32, dataset=args.dataset)
             else:
                 sys.exit("resnet doesn't implement those depth!")
+        elif args.arch == "simple":
+            model = InOut(96,6)
         else:
             sys.exit("wrong arch!")
 
@@ -806,40 +973,45 @@ def main():
 
     # CL buffer and dataset setup
     dataset = get_dataset(args)
+    global is_two_dim
+    is_two_dim = args.dataset in [SequentialHHAR.NAME]
+    print('*'*100)
+    print('dataset' , args)
+
     print("*"*10 + f"Inspecting {args.dataset}" + "*"*10)
     print("*"*10 + "Initializing buffer" + "*"*10)
 
-    if args.buffer_size > 0:
-        buffer = Buffer(args.buffer_size, torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+    if args.buffer_size > 0: # if there is a specified buffer size
+        buffer = Buffer(args.buffer_size, torch.device('cuda' if torch.cuda.is_available() else 'cpu')) #create a buffer
     else:
         buffer = None
-
-    acc_matrix = np.zeros((dataset.N_TASKS, dataset.N_TASKS))  
+    #acc matric will be 3x3 if there are 3 tasks
+    acc_matrix = np.zeros((dataset.N_TASKS, dataset.N_TASKS)) #create an accuracy matrix of initialized with 0s for each of the tasks
 
     # Initialize dictionary to save statistics for every example presentation
     # example_stats_train = {}  # change name because fogetting function also have example_stats
+    task_valid_info = {}
+    for t in range(dataset.N_TASKS): #for each copntinaul learning task set out
+        example_stats_train = {}
 
-    for t in range(dataset.N_TASKS):
-        # do it per task
-        example_stats_train = {}  
-
-        optimizer_init_lr = args.warmup_lr if args.warmup else args.lr
+        optimizer_init_lr = args.warmup_lr if args.warmup else args.lr # the learning rate to be used
 
         optimizer = None
-        if (args.optmzr == 'sgd'):
+        if (args.optmzr == 'sgd'): # the optimizers
             # optimizer = torch.optim.SGD(model.parameters(), optimizer_init_lr, momentum=0.9, weight_decay=1e-4)
-            optimizer = torch.optim.SGD(model.parameters(), optimizer_init_lr) # CL no momentum and wd
+            optimizer = torch.optim.SGD(model.parameters(), optimizer_init_lr) # CL no momentum and wd set the optimizer
         elif (args.optmzr == 'adam'):
             optimizer = torch.optim.Adam(model.parameters(), optimizer_init_lr)
 
         scheduler = None
 
         # initialize training dataset and full dataset here
-        _, _, train_dataset, _ = dataset.get_data_loaders(return_dataset=True)
-        full_dataset = copy.deepcopy(train_dataset)
+
+        _, _, train_dataset, test_dat = dataset.get_data_loaders(return_dataset=True) # get the training dataset
+        full_dataset = copy.deepcopy(train_dataset) # create a copy of the training dataset
 
         if args.sorting_file == None:
-            train_indx = np.array(range(len(full_dataset.targets)))
+            train_indx = np.array(range(len(full_dataset.targets))) # create an array from [0-> len(training_set)]
         else:
             try:
                 with open(
@@ -852,38 +1024,46 @@ def main():
                     ordered_indx = pickle.load(fin)['indices']
 
             # Get the indices to remove from training
-            elements_to_remove = np.array(ordered_indx)[-1:-1 + args.remove_n]
+            elements_to_remove = np.array(ordered_indx)[-1:-1 + args.remove_n] # get the indicies that will go the testing (i think)
             print('elements_to_remove', len(elements_to_remove))
 
             # Remove the corresponding elements
             train_indx = np.setdiff1d(range(len(train_dataset.targets)), elements_to_remove)
             print('train_indx', len(train_indx))
-
+        # adam = torch.optim.Adam()
         # Reassign train data and labels and save the removed data
-        train_dataset.data = full_dataset.data[train_indx, :, :, :]
+        train_dataset.data = full_dataset.data[train_indx, :, :, :] if not is_two_dim else full_dataset.data[train_indx, :] #this will set the data of the training set to be all values on all dimensions will not do anything for the first run
         print(train_dataset.data.shape)  # (35000, 32, 32, 3)
-
-        train_dataset.targets = np.array(full_dataset.targets)[train_indx].tolist()
+        #TODO this may not be mutating the overall architecture (may need to do a dataset.training = full_dataset.data[train_inx,:]
+        train_dataset.targets = np.array(full_dataset.targets)[train_indx].tolist() #set the dastaset targets to be the modified datatset get training sset labels
         print('len(train_dataset.targets)', len(train_dataset.targets))
 
-
-        if args.use_cl_mask:
-            cur_classes = np.arange(t*dataset.N_CLASSES_PER_TASK, (t+1)*dataset.N_CLASSES_PER_TASK)
-            cl_mask = np.setdiff1d(np.arange(dataset.TOTAL_CLASSES), cur_classes)
+        #for the purpose of masking outputs for other classes in the classification output
+        if args.use_cl_mask: # if you are to use a continuous learning mask then generate one
+            cur_classes = np.arange(t*dataset.N_CLASSES_PER_TASK, (t+1)*dataset.N_CLASSES_PER_TASK) # this creates an array of values that represent the claseses present for the current task being learned ex: first iter -> [0,1] number of classes in this task
+            # print(cur_classes, "first part of the mask") # below will get the classes not in current task
+            cl_mask = np.setdiff1d(np.arange(dataset.TOTAL_CLASSES), cur_classes) #this will find the difference betweeen the two arrays so this will find difference between [0,...num_classes] and [0,1] (the classes in the current task) this returns the values present in the first not in the second
+            # print(cl_mask, "second part of the mask ") #the first iter should be [2,3,4,...,9] because those are the values present in all the classes not in the first
+            # creates way to mask  the other classes out from the output
+            f = open("quick.txt", "a") # now you will have a mask for the classes that are not in the current task
+            f.write(np.array2string(cl_mask))
+            # f.close()
         else:
             cl_mask = None
 
-        for epoch in range(int(args.epochs/dataset.N_TASKS)):
-            prune_update(epoch)
-            optimizer.zero_grad()
-            
+
+        #STARTING TRAINING for the task
+        for epoch in range(int(args.epochs/dataset.N_TASKS)): #for each epoch (Btw batch is a subset of training used in one iteration update model in batches) epoch is one full pass through the whole dataset
+            prune_update(epoch) #prune and grow with mask updates this calls update mask in the retrain  does growing and pruning every 5 epoch
+            optimizer.zero_grad() # set the optimizer to be 0 (need to do this for training)
+
             #########remove data at 25 epoch, update dataset ######
             if epoch > 0 and epoch % args.sp_mask_update_freq == 0 and epoch <= args.remove_data_epoch:
                 if args.sorting_file == None:
                     print('epoch', epoch)
 
                     unlearned_per_presentation_all, first_learned_all = [], []
-
+                    #calcualte the number of tasks forgotten
                     _, unlearned_per_presentation, _, first_learned = compute_forgetting_statistics(example_stats_train, int(args.epochs/dataset.N_TASKS))
                     print('unlearned_per_presentation', len(unlearned_per_presentation))
                     print('first_learned', len(first_learned))
@@ -930,9 +1110,14 @@ def main():
                     print('removed train_indx', len(train_indx))
 
                     # Reassign train data and labels
-                    train_dataset.data = full_dataset.data[train_indx, :, :, :]
-                    train_dataset.targets = np.array(
-                        full_dataset.targets)[train_indx].tolist()
+                    if is_two_dim:
+                        train_dataset.data = full_dataset.data[train_indx]
+                        train_dataset.targets = np.array(
+                            full_dataset.targets)[train_indx].tolist()
+                    else:
+                        train_dataset.data = full_dataset.data[train_indx, :, :, :] if not is_two_dim else full_dataset[train_indx]#TODO SEE WHATS HAPPENING HERE
+                        train_dataset.targets = np.array(
+                            full_dataset.targets)[train_indx].tolist()
 
                     print('shape', train_dataset.data.shape)
                     print('len(train_dataset.targets)', len(train_dataset.targets))
@@ -945,14 +1130,17 @@ def main():
 
             print('Training on ' + str(len(train_dataset.targets)) + ' examples')
 
-            train(model, train_dataset, criterion, scheduler, optimizer, epoch, t, buffer, dataset,
-                example_stats_train, train_indx, maskretrain=False, masks={}, cl_mask=cl_mask)
+            train(model, train_dataset, criterion, scheduler, optimizer, epoch, t, buffer, dataset, #train the model, divide into batches and then perform
+                example_stats_train, train_indx, maskretrain=False, masks={}, cl_mask=cl_mask, task_dict=task_valid_info)
+            if args.validation:
+                print("="*120, 'validation')
+                validation(model, dataset, epoch,t, task_valid_info)
 
-            prune_print_sparsity(model)
-            if args.gradient_efficient or args.gradient_efficient_mix:
+            prune_print_sparsity(model) # at the end prune and grow
+            if args.gradient_efficient or args.gradient_efficient_mix: # show the sparsity of the mask
                 show_mask_sparsity()
 
-            if epoch % args.test_epoch_interval == 0 or epoch == (int(args.epochs/dataset.N_TASKS)-1):
+            if epoch % args.test_epoch_interval == 10 or epoch == (int(args.epochs/dataset.N_TASKS)-1):
                 acc_list, til_acc_list = evaluate(model, dataset)
                 prec1 = sum(acc_list) / (t+1)
                 til_prec1 = sum(til_acc_list) / (t+1)
@@ -993,6 +1181,11 @@ def main():
                                                                                             total_sparsity,
                                                                                             t)
         torch.save(model.state_dict(), filename)
+
+    test(model,dataset)
+    # dump the validation data
+    with open(f"{args.dataset}_validation_{args.arch}_validation.pkl", 'wb') as f:
+        pickle.dump(task_valid_info, f)
 
 
 if __name__ == '__main__':

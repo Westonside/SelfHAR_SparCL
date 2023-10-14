@@ -144,7 +144,10 @@ import torch.nn.functional as F
 from torch.nn.functional import relu, avg_pool2d
 from typing import List
 
-
+# TODO: create a new model with an input and a classifier layer input 96 -> 6 classes
+# could have a hidden layer 96->1024
+#first get just in and classifier
+#then investigate sparsity
 def conv3x3(in_planes: int, out_planes: int, stride: int=1) -> F.conv2d:
     """
     Instantiates a 3x3 convolutional layer with no bias.
@@ -187,8 +190,8 @@ class BasicBlock(nn.Module):
         """
         Compute a forward pass.
         :param x: input tensor (batch_size, input_size)
-        :return: output tensor (10)
-        """
+        :return: output tensor (10) TODO IGNORE MIDDLE LAYERS IN THE FORWARED
+        """ #x will passed to feature extractor
         out = relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
         out += self.shortcut(x)
@@ -210,18 +213,18 @@ class ResNet(nn.Module):
         :param num_classes: the number of output classes
         :param nf: the number of filters
         """
-        super(ResNet, self).__init__()
+        super(ResNet, self).__init__() # want to bypass
         self.in_planes = nf
         self.block = block
         self.num_classes = num_classes
         self.nf = nf
-        self.conv1 = conv3x3(3, nf * 1)
+        self.conv1 = conv3x3(3, nf * 1) #ignore from here
         self.bn1 = nn.BatchNorm2d(nf * 1)
         self.layer1 = self._make_layer(block, nf * 1, num_blocks[0], stride=1)
         self.layer2 = self._make_layer(block, nf * 2, num_blocks[1], stride=2)
         self.layer3 = self._make_layer(block, nf * 4, num_blocks[2], stride=2)
-        self.layer4 = self._make_layer(block, nf * 8, num_blocks[3], stride=2)
-        self.linear = nn.Linear(nf * 8 * block.expansion, num_classes)
+        self.layer4 = self._make_layer(block, nf * 8, num_blocks[3], stride=2) # to here
+        self.linear = nn.Linear(nf * 8 * block.expansion, num_classes) # not a dynamic architecture
 
         self._features = nn.Sequential(self.conv1,
                                        self.bn1,
@@ -231,7 +234,7 @@ class ResNet(nn.Module):
                                        self.layer3,
                                        self.layer4
                                        )
-        self.classifier = self.linear
+        self.classifier = self.linear #this self.linear is 224 this is classifier layer  TODO PASS INPUT to the classifier layer
 
     def _make_layer(self, block: BasicBlock, planes: int,
                     num_blocks: int, stride: int) -> nn.Module:
@@ -258,7 +261,7 @@ class ResNet(nn.Module):
         :return: output tensor (output_classes)
         """
         
-        out = relu(self.bn1(self.conv1(x))) # 64, 32, 32
+        out = relu(self.bn1(self.conv1(x))) # 64, 32, 32 # ignore  from here
         if hasattr(self, 'maxpool'):
             out = self.maxpool(out)
         out = self.layer1(out)  # -> 64, 32, 32
@@ -266,12 +269,12 @@ class ResNet(nn.Module):
         out = self.layer3(out)  # -> 256, 8, 8
         out = self.layer4(out)  # -> 512, 4, 4
         out = avg_pool2d(out, out.shape[2]) # -> 512, 1, 1
-        feature = out.view(out.size(0), -1)  # 512
+        feature = out.view(out.size(0), -1)  # 512 # ignore end
 
         if returnt == 'features':
             return feature
-
-        out = self.classifier(feature)
+    #just pass to the classifier layer
+        out = self.classifier(feature) # 274 want to keep
         
         if returnt == 'out':
             return out
@@ -282,7 +285,7 @@ class ResNet(nn.Module):
 
 
 def resnet18(dataset: str, nf: int=64) -> ResNet:
-    """
+    """ when calls backbone will gen resnet obj
     Instantiates a ResNet18 network.
     :param nclasses: number of output classes
     :param nf: number of filters
@@ -294,4 +297,6 @@ def resnet18(dataset: str, nf: int=64) -> ResNet:
         nclasses = 100
     elif dataset == 'seq-tinyimg':
         nclasses = 200
-    return ResNet(BasicBlock, [2, 2, 2, 2], nclasses, nf)
+    elif dataset == 'hhar_features':
+        nclasses = 6
+    return ResNet(BasicBlock, [2, 2, 2, 2], nclasses, nf) #nf = num filter turn off in class resnet

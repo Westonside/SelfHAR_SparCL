@@ -4,12 +4,11 @@ import numpy as np
 def test_sparsity(model, column=True, channel=True, filter=True, kernel=False):
 
     # --------------------- total sparsity --------------------
-    total_zeros = 0
-    total_nonzeros = 0
-    layer_cont = 1
-
+    total_zeros = 0 # total zeros
+    total_nonzeros = 0 # total non zero values
+    layer_cont = 1 #
     for name, weight in model.named_parameters():
-        if (len(weight.size()) == 4):# and "shortcut" not in name):
+        if (len(weight.size()) == 4):# and "shortcut" not in name): #this skips because it is not a convolutional layer
             zeros = np.sum(weight.cpu().detach().numpy() == 0)
             total_zeros += zeros
             non_zeros = np.sum(weight.cpu().detach().numpy() != 0)
@@ -19,14 +18,14 @@ def test_sparsity(model, column=True, channel=True, filter=True, kernel=False):
 
         layer_cont += 1
 
-    comp_ratio = float((total_zeros + total_nonzeros)) / float(total_nonzeros)
-    total_sparsity = total_zeros / (total_zeros + total_nonzeros)
+    comp_ratio = float((total_zeros + total_nonzeros)) / float(total_nonzeros) if layer_cont > 5 else 0
+    total_sparsity = total_zeros / (total_zeros + total_nonzeros) if layer_cont > 5 else 0
 
     print("---------------------------------------------------------------------------")
     print("total number of zeros: {}, non-zeros: {}, zero sparsity is: {:.4f}".format(
-        total_zeros, total_nonzeros, total_zeros / (total_zeros + total_nonzeros)))
+        total_zeros, total_nonzeros, total_zeros / (total_zeros + total_nonzeros) if layer_cont > 5 else 0))
     print("only consider conv layers, compression rate is: {:.4f}".format(
-        (total_zeros + total_nonzeros) / total_nonzeros))
+        (total_zeros + total_nonzeros) / total_nonzeros) if layer_cont > 5 else 0)
     print("===========================================================================\n\n")
 
     # --------------------- column sparsity --------------------
