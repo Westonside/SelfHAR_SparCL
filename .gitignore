@@ -1,3 +1,5 @@
 /checkpoints/
 __pycache__/
 .idea
+data/CIFAR10/cifar-10-batches-py
+prune_utils/__pychache
