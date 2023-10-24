@@ -159,7 +159,7 @@ test_har = True
 args = argparse.Namespace(
     arch= 'simple' if test_har  else 'resnet',
     # arch='resnet',
-    shuffle= True if test_har else False,
+    shuffle= False if test_har else False,
     depth=18,
     workers=4,
     multi_gpu=False,
@@ -652,7 +652,10 @@ def mask_classes(outputs, dataset, k):
 '''
 def validation(model,dataset, epoch, task, task_dict):
     model.eval() # turn on evaluate model
-    task_dict[task] = {epoch : {"individual": []}} # in the dict at the task value is a value for the epoch
+
+    if task not in task_dict:
+        task_dict[task] = {}
+    task_dict[task][epoch] =  {"individual": []} # in the dict at the task value is a value for the epoch
     with torch.no_grad():
         total_correct = 0
         total_loss = 0
@@ -675,7 +678,8 @@ def validation(model,dataset, epoch, task, task_dict):
             correct += pred.eq(label.data.view_as(pred)).cpu().sum().item()
             total_correct += correct # add the total correct to the total
 
-            task_acc = (float(correct)/np.size(task_class_vals[0])) * 100.
+            task_acc = (float(correct)/len(data)) * 100.
+            assert(task_acc < 100.)
             cur_task_epoch_task = {
                 "task": t,
                 "task_validation_loss": task_valid_loss,

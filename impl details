@@ -139,6 +139,9 @@ NOTE for DERPP: Reference the DERPP screenshot and labelled pdf to learn about t
 - every args.test_epoch_interval or every few epochs the accuracy for task incremental learning will be tested
 
 
+## Testing
+The reason that the testing accuracy was the same for the step before is because the training will run an evaluation function that uses
+the testing seat at the last task
 # Impl Notes
 ## Training
 - For every step of training you have to zero_grad() your optimizer - learn why
@@ -146,5 +149,4 @@ NOTE for DERPP: Reference the DERPP screenshot and labelled pdf to learn about t
 - Pytorch has a scheduler that is used to find the best learning rate, the scheduler will look at the learning rate throughout training, updating at a specified number of steps)
 - A step in the case of a scheduler is an iteration or an epoch in the training process
 - The validation set is used to validate the model during the training stage, gives information on how to best update hyper params
-- During training model will also be using validation, weights will not be used
-
+- During training model will also be using validation, weights will not be use
