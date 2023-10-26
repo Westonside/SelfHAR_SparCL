@@ -17,7 +17,7 @@ from models.in_out_model import InOut
 # from models.vgg_grasp import vgg19, vgg16
 # from models.resnet20_cifar import resnet20
 from models.resnet18_cifar import resnet18
-
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from torch.optim.lr_scheduler import _LRScheduler
 
 from testers import *
@@ -160,6 +160,8 @@ args = argparse.Namespace(
     arch= 'simple' if test_har  else 'resnet',
     # arch='resnet',
     shuffle= False if test_har else False,
+    modal_file='HHAR/gyro_motion_hhar.pkl',
+    # modal_file='HHAR/accel_motion_hhar.pkl',
     depth=18,
     workers=4,
     multi_gpu=False,
@@ -746,7 +748,7 @@ def test(model, dataset):
     return acc_list, til_acc_list
 
 
-def evaluate(model, dataset, last=False):
+def evaluate(model, dataset, last=False, test=False):
     """
     Evaluates the accuracy of the model for each past task.
     :param model: the model to be evaluated
@@ -757,37 +759,54 @@ def evaluate(model, dataset, last=False):
     model.eval()
     accs = np.zeros((dataset.N_TASKS, ))
     accs_mask_classes = np.zeros((dataset.N_TASKS,))
+    confusion = [np.zeros((dataset.TOTAL_CLASSES,dataset.TOTAL_CLASSES), dtype=int) for _ in range(dataset.N_TASKS)]
     for k, test_loader in enumerate(dataset.test_loaders):
         if last and k < len(dataset.test_loaders) - 1:
             continue
         correct, correct_mask_classes, total = 0.0, 0.0, 0.0
+        predictions = {
+            'predictions': [],
+            'labels': [],
+        }
         for data in test_loader:
             with torch.no_grad():
                 if len(data) == 3:
                     inputs,labels, _ = data
                 else:
                     inputs, labels = data
-                inputs, labels = inputs.cuda(), labels.cuda()
-                # if 'class-il' not in model.COMPATIBILITY:
-                #     outputs = model(inputs, k)
-                # else:
-                outputs = model(inputs)
 
-                _, pred = torch.max(outputs.data, 1)
-                correct += torch.sum(pred == labels).item()
-                total += labels.shape[0]
+                predictions['labels'].extend(labels.tolist())
+                inputs, labels = inputs.cuda(), labels.cuda()
+
+                outputs = model(inputs) # predict on the input
+
+                _, pred = torch.max(outputs.data, 1) # get the predictions
+                predictions['predictions'].extend(pred.tolist())
+                correct += torch.sum(pred == labels).item() # get th ecorrect items
+                total += labels.shape[0] # increment the total inputs
 
                 # if dataset.SETTING == 'class-il':
                 mask_classes(outputs, dataset, k)
                 _, pred = torch.max(outputs.data, 1)
                 correct_mask_classes += torch.sum(pred == labels).item()
 
-        # accs.append(correct / total * 100)
         accs[k] = correct / total * 100
-        # accs_mask_classes.append(correct_mask_classes / total * 100)
         accs_mask_classes[k] = correct_mask_classes / total * 100
+        # here you will update the confusion matrix at that index
+        matrix = confusion[k]
+        for i, answer in enumerate(predictions['labels']):
+            # go through the answer and mark if it was a false positive or not
+            matrix[answer][predictions['predictions'][i]] += 1
 
+        confusion[k] = matrix
+
+    print("*"*50, "Confusion Matrix", "*"*50)
+    print('\n\n',confusion, '\n')
+    # with open('testing_restults_LOOK.txt', 'wb') as f:
+    #     f.write(f"{confusion}")
     return accs, accs_mask_classes
+
+
 
 
 def compute_forgetting_statistics(diag_stats, npresentations):
@@ -1188,7 +1207,9 @@ def main():
 
     test(model,dataset)
     # dump the validation data
-    with open(f"{args.dataset}_validation_{args.arch}_validation.pkl", 'wb') as f:
+
+    run_file = 'HHAR/hhar_features.pkl' if args.modal_file is None else 'gyro'
+    with open(f"{run_file}_validation_{args.arch}_validation.pkl", 'wb') as f:
         pickle.dump(task_valid_info, f)
 
 

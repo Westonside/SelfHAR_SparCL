@@ -72,6 +72,7 @@ def shuffle_data(data, labels):
 
 class SequentialHHAR(ContinualDataset):
     NAME = 'hhar_features'
+    GYRO = 'hhar_features_gyro'
     SETTING = 'class-il'
     N_CLASSES_PER_TASK = 2
     N_TASKS = 3
@@ -81,7 +82,12 @@ class SequentialHHAR(ContinualDataset):
     def __init__(self, args: Namespace):
         # load the data
         try:
-            with open(base_path() + 'HHAR/hhar_features.pkl', 'rb') as f:
+            try:
+                file = args.modal_file
+            except:
+                file = 'HHAR/hhar_features.pkl'
+
+            with open(base_path() + file, 'rb') as f:
                 self.t = 0
                 data = pickle.load(f)
                 # shuffle the data

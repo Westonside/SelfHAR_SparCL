@@ -150,3 +150,24 @@ the testing seat at the last task
 - A step in the case of a scheduler is an iteration or an epoch in the training process
 - The validation set is used to validate the model during the training stage, gives information on how to best update hyper params
 - During training model will also be using validation, weights will not be use
+
+
+## stats
+training with gyro test:
+Task 0, Average loss 0.0004, Class inc Accuracy 85.269, Task inc Accuracy 86.407
+Task 1, Average loss 0.0000, Class inc Accuracy 90.249, Task inc Accuracy 98.853
+Task 2, Average loss 0.0001, Class inc Accuracy 79.869, Task inc Accuracy 99.509
+much worse than the accel
+
+here is with the accel:
+
+Task 0, Average loss 0.0000, Class inc Accuracy 98.131, Task inc Accuracy 99.291
+Task 1, Average loss 0.0001, Class inc Accuracy 93.805, Task inc Accuracy 98.686
+Task 2, Average loss 0.0001, Class inc Accuracy 87.263, Task inc Accuracy 99.621
+
+
+final accel:
+
+Task 0, Average loss 0.0001, Class inc Accuracy 99.076, Task inc Accuracy 99.569
+Task 1, Average loss 0.0000, Class inc Accuracy 94.192, Task inc Accuracy 98.232
+Task 2, Average loss 0.0003, Class inc Accuracy 86.360, Task inc Accuracy 99.841

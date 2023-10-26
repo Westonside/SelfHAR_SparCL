@@ -14,7 +14,9 @@ NAMES = {
     SequentialMNIST.NAME: SequentialMNIST,
     SequentialCIFAR10.NAME: SequentialCIFAR10,
     SequentialCIFAR100.NAME: SequentialCIFAR100,
-    SequentialHHAR.NAME: SequentialHHAR
+    SequentialHHAR.NAME: SequentialHHAR,
+    SequentialHHAR.GYRO: SequentialHHAR
+
 }
 
 
