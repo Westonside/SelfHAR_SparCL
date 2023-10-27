@@ -661,7 +661,7 @@ def validation(model,dataset, epoch, task, task_dict):
     with torch.no_grad():
         total_correct = 0
         total_loss = 0
-        for t in range(dataset.N_TASKS):
+        for t in range(task): # go up to that task
             cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (t + 1) * dataset.N_CLASSES_PER_TASK)
             # task_valid_loss = 0
             correct = 0
@@ -914,7 +914,7 @@ def get_hms(seconds):
     return h, m, s
 
 
-def main():
+def sparCL(run_num):
     if args.cuda:
         if args.arch == "vgg":
             if args.depth == 19:
@@ -1209,9 +1209,42 @@ def main():
     # dump the validation data
 
     run_file = 'HHAR/hhar_features.pkl' if args.modal_file is None else 'gyro'
-    with open(f"{run_file}_validation_{args.arch}_validation.pkl", 'wb') as f:
-        pickle.dump(task_valid_info, f)
+    return task_valid_info
+    # with open(f"{run_file}_validation_{args.arch}_validation.pkl", 'wb') as f:
+    #     pickle.dump(task_valid_info, f)
+
+
+
+def process_validations(valids):
+    first = valids[0]
+    # go through each of the keys
+    for task in first.keys():
+        print(task)
+        for epoch in first[task].keys():  # go through each epoch
+            for i, epoch_task in enumerate(
+                    first[task][epoch]['individual']):  # these are the stats at each epoch for each task
+                # get all the accuracies for all runs at this point
+                for j, stat in enumerate(epoch_task.keys()):
+                    # collect the stat across all runs
+                    all_run_stat = np.array([x[task][epoch]['individual'][i][stat] for x in valids])
+                    stat_mean = np.mean(all_run_stat)
+                    print(all_run_stat, stat_mean)
+                    print("\n")
+                    # at the end set the first
+                    first[task][epoch]['individual'][i][stat] = stat_mean
+
+
+    with open (f"gyro_fiverun_mean_validation_simple.pkl", 'wb') as f:
+        pickle.dump(first, f)
+
 
 
 if __name__ == '__main__':
-    main()
+    nums_run = 5
+    validations = []
+    for i in range(nums_run):
+        validations.append(sparCL(i))
+        torch.cuda.empty_cache() # clear the cache after each run
+    process_validations(validations)
+
+    print('done')
