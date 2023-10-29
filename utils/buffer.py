@@ -30,12 +30,13 @@ def ring(num_seen_examples: int, buffer_portion_size: int, task: int) -> int:
     return num_seen_examples % buffer_portion_size + task * buffer_portion_size
 
 
+
 class Buffer:
     """
     The memory buffer of rehearsal method.
     """
     def __init__(self, buffer_size, device, n_tasks=None, mode='reservoir'):
-        assert mode in ['ring', 'reservoir'] #ensure one of the correct buffer modes
+        assert mode in ['ring', 'reservoir', 'herding'] #ensure one of the correct buffer modes
         self.buffer_size = buffer_size #set the buffer size
         self.device = device #set the dvice
         self.num_seen_examples = 0 #default the seen examples
@@ -44,6 +45,9 @@ class Buffer:
             assert n_tasks is not None #assert there are a certain nubmer of tasks
             self.task_number = n_tasks #set the number of tasks
             self.buffer_portion_size = buffer_size // n_tasks #divide the buffer up into tasks
+        if mode == 'herding': #if herding mode
+            self.seen_classes = 0 #set the seen classes to 0
+
         self.attributes = ['examples', 'labels', 'logits', 'task_labels'] # set the attributes of the buffer
 
     def init_tensors(self, examples: torch.Tensor, labels: torch.Tensor,
@@ -85,6 +89,8 @@ class Buffer:
                     self.logits[index] = logits[i].to(self.device)
                 if task_labels is not None:
                     self.task_labels[index] = task_labels[i].to(self.device)
+
+
 
     def get_data(self, size: int, transform: transforms=None) -> Tuple:
         """
@@ -140,3 +146,87 @@ class Buffer:
             if hasattr(self, attr_str):
                 delattr(self, attr_str)
         self.num_seen_examples = 0
+
+
+    def fill_buffer(self, dataset, task: int):
+        samples_per_class = self.buffer_size // len(dataset.N_CLASSES_PER_TASK*task) # get the number of samples per class
+        # if you are in the first task then you will fill the buffer with the first task only
+        if task > 0:
+            buf_x, buf_y, buf_l = self.get_all_data(None) # get all data from the buffer in format (input, label, logits)
+            self.empty() # empty the buffer
+            for _y in buf_y.unique(): # for all the unique classes in the buffer
+               # get the indicies of where the label is equal to the current label
+               idx = (buf_y == _y)
+               _y_x, _y_y, _y_l = buf_x[idx], buf_y[idx], buf_l[idx] # get the inputs, labels and logits
+               self.add_data(
+                    examples=_y_x[:samples_per_class],
+                    labels=_y_y[:samples_per_class],
+                    logits=_y_l[:samples_per_class]
+               )
+
+            # 2) Then, fill with current tasks
+        loader = dataset.train_loader  # get the training loader
+        norm_trans = dataset.get_normalization_transform()  # get the normalization transform
+        if norm_trans is None:
+            def norm_trans(x): return x  # identity function if no normalization transform
+        classes_start, classes_end = task* dataset.N_CLASSES_PER_TASK, (
+                    task+ 1) * dataset.N_CLASSES_PER_TASK  # get the start and end of the classes
+
+        # 2.1 Extract all features
+        a_x, a_y, a_f, a_l = [], [], [], []  # inputs labels features and logits
+        for x, y, not_norm_x in loader:  # for the input, label and non normalized input in the loader
+            mask = (y >= classes_start) & (y < classes_end)  # get the mask of the labels that are in the current task
+            x, y, not_norm_x = x[mask], y[mask], not_norm_x[
+                mask]  # get the inputs, labels and non normalized inputs that are in the current task
+            if not x.size(0):
+                continue
+            x, y, not_norm_x = (a.to(self.device) for a in
+                                (x, y, not_norm_x))  # move the input label and non normalized input to the device
+            a_x.append(not_norm_x.to('cpu'))  # append the non normalized input to the cpu
+            a_y.append(y.to('cpu'))  # append the label to the cpu
+            feats = x
+            outs = y
+            a_f.append(feats.cpu())  # append the features to the cpu
+            a_l.append(torch.sigmoid(outs).cpu())  # append the outputs to the cpu andn apply sigmoid
+        a_x, a_y, a_f, a_l = torch.cat(a_x), torch.cat(a_y), torch.cat(a_f), torch.cat(
+            a_l)  # concatenate all the inputs, labels, features and outputs
+
+        #     feats = self.net(norm_trans(not_norm_x), returnt='features')  # get the features from the network
+        #     outs = self.net.classifier(feats)  # get the outputs from the network
+        #     a_f.append(feats.cpu())  # append the features to the cpu
+        #     a_l.append(torch.sigmoid(outs).cpu())  # append the outputs to the cpu andn apply sigmoid
+        # a_x, a_y, a_f, a_l = torch.cat(a_x), torch.cat(a_y), torch.cat(a_f), torch.cat(
+        #     a_l)  # concatenate all the inputs, labels, features and outputs
+        # skip this stage because have pre extracted features
+
+        # 2.2 Compute class means
+        for _y in a_y.unique():  # this will look to find the most representative examples for each class
+            idx = (a_y == _y)  # get the indicies of the labels that are equal to the current label
+            _x, _y, _l = a_x[idx], a_y[idx], a_l[idx]  # get the inputs, labels and logits
+            feats = a_f[idx]  # get the features
+            mean_feat = feats.mean(0, keepdim=True)  # get the mean of the features
+
+            running_sum = torch.zeros_like(
+                mean_feat)  # create a running sum of zeros with the same shape as the mean features
+            i = 0
+            while i < samples_per_class and i < feats.shape[
+                0]:  # while the number of samples per class is less than the number of features
+                cost = (mean_feat - (feats + running_sum) / (i + 1)).norm(2,
+                                                                          1)  # calculate the cost which is the norm of the mean features minus the features plus the running sum divided by i+1
+
+                idx_min = cost.argmin().item()  # get the index of the minimum cost
+
+                self.add_data(
+                    examples=_x[idx_min:idx_min + 1].to(self.device),
+                    labels=_y[idx_min:idx_min + 1].to(self.device),
+                    logits=_l[idx_min:idx_min + 1].to(self.device)
+                )
+
+                running_sum += feats[idx_min:idx_min + 1]
+                feats[idx_min] = feats[idx_min] + 1e6
+                i += 1
+
+        # # assert len(mem_buffer.examples) <= mem_buffer.buffer_size
+        # # assert mem_buffer.num_seen_examples <= mem_buffer.buffer_size
+        #
+        # self.net.train(mode)
