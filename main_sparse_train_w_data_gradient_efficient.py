@@ -17,7 +17,6 @@ from models.in_out_model import InOut
 # from models.vgg_grasp import vgg19, vgg16
 # from models.resnet20_cifar import resnet20
 from models.resnet18_cifar import resnet18
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from torch.optim.lr_scheduler import _LRScheduler
 
 from testers import *
@@ -164,6 +163,7 @@ args = argparse.Namespace(
     shuffle=False if test_har else False,
     # modal_file='HHAR/gyro_motion_hhar.pkl',
     modal_file='HHAR/accel_motion_hhar.pkl',
+    buffer_mode='herding' if test_har else 'reservoir',
     depth=18,
     workers=4,
     multi_gpu=False,
@@ -595,7 +595,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
             buffer.add_data(examples=not_transformed_inputs, labels=targets)
         elif args.replay_method == 'der':
             buffer.add_data(examples=not_transformed_inputs, logits=outputs.data)
-        elif args.replay_method == 'derpp':
+        elif args.replay_method == 'derpp' and args.buffer_mode != 'herding':
             buffer.add_data(examples=not_transformed_inputs, labels=targets, logits=outputs.data)
 
         if batch_idx % 10 == 0:  # if the batch index is divisble by 10
@@ -1021,7 +1021,7 @@ def sparCL(run_num, data_location=None):
 
     if args.buffer_size > 0:  # if there is a specified buffer size
         buffer = Buffer(args.buffer_size,
-                        torch.device('cuda' if torch.cuda.is_available() else 'cpu'))  # create a buffer
+                        torch.device('cuda' if torch.cuda.is_available() else 'cpu'), mode=args.buffer_mode)  # create a buffer
     else:
         buffer = None
     # acc matric will be 3x3 if there are 3 tasks
@@ -1191,6 +1191,7 @@ def sparCL(run_num, data_location=None):
                 print("=" * 120, 'validation')
                 validation(model, dataset, epoch, t, task_valid_info)
 
+
             prune_print_sparsity(model)  # at the end prune and grow
             if args.gradient_efficient or args.gradient_efficient_mix:  # show the sparsity of the mask
                 show_mask_sparsity()
@@ -1237,6 +1238,9 @@ def sparCL(run_num, data_location=None):
                                                                                                        total_sparsity,
                                                                                                        t)
         torch.save(model.state_dict(), filename)
+        # at the end of the training of the task fill the buffer with examples
+        if args.buffer_mode == 'herding':
+            buffer.fill_buffer(dataset,t)
 
     test(model, dataset)
     # dump the validation data
