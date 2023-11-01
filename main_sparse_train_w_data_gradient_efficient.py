@@ -479,7 +479,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                     # buf_mse_loss = buf_mse_loss.mean()
                     ce_loss += args.buffer_weight * buf_mse_loss
 
-                elif args.replay_method == "derpp":  # if you are using der++ this is our case you classify and get loss baesd off past predictions compared to current and then try to clasiify past tasks
+                elif args.replay_method == "derpp" and args.buffer_mode != 'herding':  # if you are using der++ this is our case you classify and get loss baesd off past predictions compared to current and then try to clasiify past tasks
                     buf_inputs, _, buf_logits = buffer.get_data(
                         # get the input data and the past logits from the buffer
                         args.batch_size,
@@ -1050,6 +1050,12 @@ def sparCL(run_num, data_location=None):
 
         _, _, train_dataset, test_dat = dataset.get_data_loaders(return_dataset=True)  # get the training dataset
         full_dataset = copy.deepcopy(train_dataset)  # create a copy of the training dataset
+        if args.buffer_mode == 'herding':
+            # this is where you will check if the buffer is empty or not
+            if buffer is not None and buffer.is_empty():  # if the buffer is not empty
+                # then you will combine the buffer inputs and labels with the training set
+                print('buffer is not empty')
+                full_dataset.data = np.concatenate((full_dataset.data, buffer.get_all_data()), axis=0)
 
         if args.sorting_file == None:
             train_indx = np.array(range(len(full_dataset.targets)))  # create an array from [0-> len(training_set)]
