@@ -10,6 +10,8 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 import pickle
 import copy
+
+import utils.model_utils
 from datasets.hhar_features import SequentialHHAR
 import time
 from models.in_out_model import InOut
@@ -160,6 +162,7 @@ dynamic = True
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
+    patience=10,
     # arch='resnet',
     shuffle=False if test_har else False,
     # modal_file='HHAR/gyro_motion_hhar.pkl',
@@ -171,7 +174,7 @@ args = argparse.Namespace(
     s=0.0001,
     batch_size=32,
     test_batch_size=256,
-    epochs=250,
+    epochs=500,
     optmzr='sgd',
     lr=0.03,
     lr_decay=60,
@@ -726,6 +729,7 @@ def validation(model, dataset, epoch, task, task_dict):
     print("=" * 110, f"Total validation loss: {total_loss}\n")
 
     model.train()  # set back to training mode
+    return total_loss
 
 
 def test(model, dataset):
@@ -958,6 +962,8 @@ def sparCL(run_num, data_location=None):
 
     criterion = nn.CrossEntropyLoss().cuda()
     criterion.__init__(reduce=False)
+    early_stopping = utils.model_utils.EarlyStop(patience=args.patience)
+
 
     # ----------- load checkpoint ---------------------
     model_state = None
@@ -1194,8 +1200,10 @@ def sparCL(run_num, data_location=None):
                   task_dict=task_valid_info)
             if args.validation:
                 print("=" * 120, 'validation')
-                validation(model, dataset, epoch, t, task_valid_info)
-
+                total_loss = validation(model, dataset, epoch, t, task_valid_info)
+                if early_stopping.check(total_loss):
+                    print('Early stopping at epoch: ', epoch)
+                    break # stop the training for the task
 
             prune_print_sparsity(model)  # at the end prune and grow
             if args.gradient_efficient or args.gradient_efficient_mix:  # show the sparsity of the mask
