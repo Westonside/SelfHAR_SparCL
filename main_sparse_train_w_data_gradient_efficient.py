@@ -155,10 +155,11 @@ parser.add_argument('--is-two-dim', type=bool, default=False, help='indicate if 
 prune_parse_arguments(parser)
 # args = parser.parse_args()
 
-test_har = True
-
+test_har = False
+dynamic = True
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
+    arch_type = 'dynamic' if dynamic else 'static',
     # arch='resnet',
     shuffle=False if test_har else False,
     # modal_file='HHAR/gyro_motion_hhar.pkl',
@@ -1093,12 +1094,10 @@ def sparCL(run_num, data_location=None):
             cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (
                         t + 1) * dataset.N_CLASSES_PER_TASK)  # this creates an array of values that represent the claseses present for the current task being learned ex: first iter -> [0,1] number of classes in this task
             # print(cur_classes, "first part of the mask") # below will get the classes not in current task
-            cl_mask = np.setdiff1d(np.arange(dataset.TOTAL_CLASSES),
+            cl_mask = np.setdiff1d(np.arange(model.layer2.out_features), # this will now get the classes not in the current task but allows a dynamic architecture
                                    cur_classes)  # this will find the difference betweeen the two arrays so this will find difference between [0,...num_classes] and [0,1] (the classes in the current task) this returns the values present in the first not in the second
             # print(cl_mask, "second part of the mask ") #the first iter should be [2,3,4,...,9] because those are the values present in all the classes not in the first
             # creates way to mask  the other classes out from the output
-            f = open("quick.txt", "a")  # now you will have a mask for the classes that are not in the current task
-            f.write(np.array2string(cl_mask))
             # f.close()
         else:
             cl_mask = None
@@ -1229,6 +1228,7 @@ def sparCL(run_num, data_location=None):
                 if args.evaluate_mode and args.eval_checkpoint is not None:
                     break
 
+
         # save model checkpoint after every task
         filename = "./{}seed{}_{}_{}{}_{}_acc_{:.3f}_fgt_{:.3f}_{}_lr{}_{}_sp{:.3f}_task_{}.pt".format(args.save_model,
                                                                                                        seed,
@@ -1247,6 +1247,10 @@ def sparCL(run_num, data_location=None):
         # at the end of the training of the task fill the buffer with examples
         if args.buffer_mode == 'herding':
             buffer.fill_buffer(dataset,t)
+
+        # at the end of the task you will extend the model
+        if args.extend_model:
+            model.extend_fc_layer(dataset.N_CLASSES_PER_TASK) # it will add n classes to the prediction
 
     test(model, dataset)
     # dump the validation data
