@@ -14,3 +14,7 @@ class EarlyStop():
             return True
         else:
             return False
+
+    def reset(self):
+        self.count = 0
+        self.best_loss = float("inf")

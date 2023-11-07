@@ -31,6 +31,7 @@ from prune_utils import *
 
 # CL dataset and buffer library
 from datasets import get_dataset
+from utils import dynamic_architecture_util
 from utils.buffer import Buffer
 
 # Training settings
@@ -156,18 +157,19 @@ parser.add_argument('--is-two-dim', type=bool, default=False, help='indicate if 
 
 prune_parse_arguments(parser)
 # args = parser.parse_args()
-
-test_har = False
+total_epochs = 500
+test_har = True
+herding = False
 dynamic = True
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
-    patience=10,
+    patience=15,
     # arch='resnet',
     shuffle=False if test_har else False,
     # modal_file='HHAR/gyro_motion_hhar.pkl',
     modal_file='HHAR/accel_motion_hhar.pkl',
-    buffer_mode='herding' if test_har else 'reservoir',
+    buffer_mode='herding' if  herding else 'reservoir',
     depth=18,
     workers=4,
     multi_gpu=False,
@@ -488,6 +490,18 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                         # get the input data and the past logits from the buffer
                         args.batch_size,
                         transform=dataset.get_transform())  # you will try to get get your logits as close as possible to the logits in the buffer (regularizes) want to predict similarly to past predictions to preserve prediction
+                    # you will need to transform the logits if you have a dynamic architecture
+
+                    if args.arch_type == "dynamic":
+                        buf_logits = buf_logits.cpu()
+                        imbalanced_logits = len(buf_logits[0]) != model.layer2.out_features
+
+                        # Convert the list of tensors on the CPU
+                        buf_logits = dynamic_architecture_util.extend_array(buf_logits, model.layer2.out_features).cuda()
+
+
+                        # Move buf_logits back to the GPU
+
                     buf_output = model(buf_inputs)  # predict on the past inputs in the buffer
                     # print(buf_inputs.shape)
                     buf_mse_loss = F.mse_loss(buf_output, buf_logits,
@@ -600,6 +614,15 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         elif args.replay_method == 'der':
             buffer.add_data(examples=not_transformed_inputs, logits=outputs.data)
         elif args.replay_method == 'derpp' and args.buffer_mode != 'herding':
+            if args.arch_type == 'dynamic' and t > 0 and imbalanced_logits: # if the first epoch and not the first task
+                #here you will have to clear the buffer and add in the larger logits values
+                _in, _lab, logits = buffer.get_all_data()
+                buffer.empty()
+                logits  = logits.cpu()
+                extended_buff = dynamic_architecture_util.extend_array(logits, model.layer2.out_features).cuda() # now that you have extended the
+                buffer.add_data(examples=_in, labels=_lab, logits=extended_buff)
+
+
             buffer.add_data(examples=not_transformed_inputs, labels=targets, logits=outputs.data)
 
         if batch_idx % 10 == 0:  # if the batch index is divisble by 10
@@ -695,7 +718,6 @@ def validation(model, dataset, epoch, task, task_dict):
             # add the data if class belongs to the current class
             task_class_vals = np.where(
                 np.isin(dataset.validation[1], cur_classes))  # get the indicies where they are in the task
-            print('testing')
             data, label = torch.tensor(dataset.validation[0][task_class_vals]).cuda(), torch.tensor(
                 dataset.validation[1][task_class_vals]).cuda()
             output = model(data)
@@ -933,7 +955,7 @@ def get_hms(seconds):
     return h, m, s
 
 
-def sparCL(run_num, data_location=None):
+def sparCL(args, data_location=None, run_num=None, epoch_info=None):
     if args.cuda:
         if args.arch == "vgg":
             if args.depth == 19:
@@ -952,7 +974,7 @@ def sparCL(run_num, data_location=None):
             else:
                 sys.exit("resnet doesn't implement those depth!")
         elif args.arch == "simple":
-            model = InOut(96, 6)
+            model = InOut(96, 2) # start with 2 classes
         else:
             sys.exit("wrong arch!")
 
@@ -1018,7 +1040,7 @@ def sparCL(run_num, data_location=None):
 
     # CL buffer and dataset setup
     dataset = get_dataset(args)
-    global is_two_dim
+    global is_two_dim, total_epochs
     is_two_dim = args.dataset in [SequentialHHAR.NAME]
     print('*' * 100)
     print('dataset', args)
@@ -1038,6 +1060,8 @@ def sparCL(run_num, data_location=None):
     # Initialize dictionary to save statistics for every example presentation
     # example_stats_train = {}  # change name because fogetting function also have example_stats
     task_valid_info = {}
+
+    epoch_info = {}
     for t in range(dataset.N_TASKS):  # for each copntinaul learning task set out
         example_stats_train = {}
 
@@ -1059,11 +1083,17 @@ def sparCL(run_num, data_location=None):
         full_dataset = copy.deepcopy(train_dataset)  # create a copy of the training dataset
         if args.buffer_mode == 'herding':
             # this is where you will check if the buffer is empty or not
-            if buffer is not None and buffer.is_empty():  # if the buffer is not empty
+            if buffer is not None and not buffer.is_empty():  # if the buffer is not empty
                 # then you will combine the buffer inputs and labels with the training set
                 print('buffer is not empty')
-                full_dataset.data = np.concatenate((full_dataset.data, buffer.get_all_data()), axis=0)
+                buff_val = buffer.get_all_data()
+                full_dataset.data = np.concatenate((full_dataset.data.cpu(), buff_val[0]), axis=0)
+                full_dataset.targets  = np.concatenate((full_dataset.targets.cpu(), buff_val[1]), axis=0)
+                full_dataset.classes = np.unique(np.concatenate((full_dataset.classes, np.unique(buff_val[1], axis=1))))
 
+                # full_dataset.classes = full_dataset.classes.cuda()
+                # full_dataset.targets = full_dataset.targets.cuda()
+                # full_dataset.data = full_dataset.data.cuda()
         if args.sorting_file == None:
             train_indx = np.array(range(len(full_dataset.targets)))  # create an array from [0-> len(training_set)]
         else:
@@ -1109,8 +1139,12 @@ def sparCL(run_num, data_location=None):
             cl_mask = None
 
         # STARTING TRAINING for the task
+        total_epochs = int(args.epochs / dataset.N_TASKS)
+        if epoch_info is not None and epoch_info.get(t) is not None: # if custom epochs have been set
+            total_epochs = epoch_info[t]
+
         for epoch in range(
-                int(args.epochs / dataset.N_TASKS)):  # for each epoch (Btw batch is a subset of training used in one iteration update model in batches) epoch is one full pass through the whole dataset
+                total_epochs):  # for each epoch (Btw batch is a subset of training used in one iteration update model in batches) epoch is one full pass through the whole dataset
             prune_update(
                 epoch)  # prune and grow with mask updates this calls update mask in the retrain  does growing and pruning every 5 epoch
             optimizer.zero_grad()  # set the optimizer to be 0 (need to do this for training)
@@ -1201,16 +1235,48 @@ def sparCL(run_num, data_location=None):
             if args.validation:
                 print("=" * 120, 'validation')
                 total_loss = validation(model, dataset, epoch, t, task_valid_info)
-                if early_stopping.check(total_loss):
-                    print('Early stopping at epoch: ', epoch)
-                    break # stop the training for the task
+                print("Total Validation Loss: ", total_loss)
+                if run_num is not None and run_num==0: # you can perform early stopping only on the first run
+                    if early_stopping.check(total_loss):
+                        # set the epoch information so that the next run knows
+                        epoch_info[t] = epoch
+                        print('Early stopping at epoch: ', epoch)
+                        acc_list, til_acc_list = evaluate(model, dataset)
+                        prec1 = sum(acc_list) / (t + 1)
+                        til_prec1 = sum(til_acc_list) / (t + 1)
+                        acc_matrix[t] = acc_list
+                        forgetting = np.mean((np.max(acc_matrix, axis=0) - acc_list)[:t]) if t > 0 else 0.0
+                        learning_acc = np.mean(np.diag(acc_matrix)[:t + 1])
+
+                        lr = optimizer.param_groups[0]['lr']
+                        log_line = 'Training on ' + str(len(train_dataset.targets)) + ' examples\n'
+                        log_line += f"Task: {t}, Epoch:{epoch}, Average Acc:[{prec1:.3f}], , Task Inc Acc:[{til_prec1:.3f}], Learning Acc:[{learning_acc:.3f}], Forgetting:[{forgetting:.3f}], LR:{lr}\n"
+                        log_line += "\t"
+                        for i in range(t + 1):
+                            log_line += f"Acc@T{i}: {acc_list[i]:.3f}\t"
+                        log_line += "\n"
+                        log_line += "\t"
+                        for i in range(t + 1):
+                            log_line += f"Til-Acc@T{i}: {til_acc_list[i]:.3f}\t"
+                        log_line += "\n"
+                        print(log_line)
+                        with open(log_filename, 'a') as f:
+                            f.write(log_line)
+                            f.write("\n")
+
+                        if args.evaluate_mode and args.eval_checkpoint is not None:
+                            break
+                        early_stopping.reset()
+                        break # stop the training for the task
 
             prune_print_sparsity(model)  # at the end prune and grow
             if args.gradient_efficient or args.gradient_efficient_mix:  # show the sparsity of the mask
                 show_mask_sparsity()
 
-            if epoch % args.test_epoch_interval == 10 or epoch == (int(args.epochs / dataset.N_TASKS) - 1):
+            if epoch % args.test_epoch_interval == 10 or epoch == (total_epochs - 1):
+            #if epoch % args.test_epoch_interval == 10 or epoch == (int(args.epochs / dataset.N_TASKS) - 1):
                 acc_list, til_acc_list = evaluate(model, dataset)
+                epoch_info[t] = epoch
                 prec1 = sum(acc_list) / (t + 1)
                 til_prec1 = sum(til_acc_list) / (t + 1)
                 acc_matrix[t] = acc_list
@@ -1254,22 +1320,23 @@ def sparCL(run_num, data_location=None):
         torch.save(model.state_dict(), filename)
         # at the end of the training of the task fill the buffer with examples
         if args.buffer_mode == 'herding':
-            buffer.fill_buffer(dataset,t)
+            buffer.fill_buffer(model, dataset,t)
 
         # at the end of the task you will extend the model
-        if args.extend_model:
+        if args.arch_type:
             model.extend_fc_layer(dataset.N_CLASSES_PER_TASK) # it will add n classes to the prediction
 
     test(model, dataset)
     # dump the validation data
 
     run_file = 'HHAR/hhar_features.pkl' if args.modal_file is None else 'gyro'
-    return task_valid_info
+    return task_valid_info, epoch_info
     # with open(f"{run_file}_validation_{args.arch}_validation.pkl", 'wb') as f:
     #     pickle.dump(task_valid_info, f)
 
 
 def process_validations(valids, modal_type):
+
     first = valids[0]
     # go through each of the keys
     for task in first.keys():
@@ -1295,14 +1362,18 @@ if __name__ == '__main__':
     nums_run = 5
 
     run_files = {
-        'gyro': 'HHAR/gyro_motion_hhar.pkl',
-        'accel': 'HHAR/accel_motion_hhar.pkl'
+        'gyro': 'HHAR/20231103-182025_hhar_features_gyro.pkl',
+        'accel': 'HHAR/20231104-162132_hhar_features_accel.pkl'
     }
-
     for dataset in run_files.keys():
         validations = []
-        for i in range(nums_run):
-            validations.append(sparCL(i, run_files[dataset]))
+        # epochs = 500
+        epoch_information = None
+        for i in range(nums_run): # this will run n times to be averaged
+            valid_info, epoch_info = sparCL(args, run_files[dataset], run_num=i, epoch_info=epoch_information)
+            if i == 0:
+                epoch_information = epoch_info
+            validations.append(valid_info)
             torch.cuda.empty_cache()  # clear the cache after each run
         process_validations(validations, dataset)
 

@@ -40,7 +40,11 @@ class Buffer:
         self.buffer_size = buffer_size #set the buffer size
         self.device = device #set the dvice
         self.num_seen_examples = 0 #default the seen examples
-        self.functional_index = eval(mode) #this evaluates an expression if it is legal python then it will execute the python code passed in
+        if mode == 'herding':
+            self.functional_index = None
+        else:
+            self.functional_index = eval(mode) #this evaluates an expression if it is legal python then it will execute the python code passed in
+
         if mode == 'ring': #if ring mode j
             assert n_tasks is not None #assert there are a certain nubmer of tasks
             self.task_number = n_tasks #set the number of tasks
@@ -148,8 +152,10 @@ class Buffer:
         self.num_seen_examples = 0
 
 
-    def fill_buffer(self, dataset, task: int):
-        samples_per_class = self.buffer_size // len(dataset.N_CLASSES_PER_TASK*task) # get the number of samples per class
+    def fill_buffer(self, model, dataset, task: int):
+        model.eval()
+
+        samples_per_class = self.buffer_size // (dataset.N_CLASSES_PER_TASK*(task+1)) # get the number of samples per class
         # if you are in the first task then you will fill the buffer with the first task only
         if task > 0:
             buf_x, buf_y, buf_l = self.get_all_data(None) # get all data from the buffer in format (input, label, logits)
@@ -185,7 +191,8 @@ class Buffer:
             a_x.append(not_norm_x.to('cpu'))  # append the non normalized input to the cpu
             a_y.append(y.to('cpu'))  # append the label to the cpu
             feats = x
-            outs = y
+            with torch.no_grad():
+                outs = model(feats)
             a_f.append(feats.cpu())  # append the features to the cpu
             a_l.append(torch.sigmoid(outs).cpu())  # append the outputs to the cpu andn apply sigmoid
         a_x, a_y, a_f, a_l = torch.cat(a_x), torch.cat(a_y), torch.cat(a_f), torch.cat(
@@ -199,10 +206,10 @@ class Buffer:
         #     a_l)  # concatenate all the inputs, labels, features and outputs
         # skip this stage because have pre extracted features
 
-        # 2.2 Compute class means
+        # 2.2 Compute class means for each class in the labels
         for _y in a_y.unique():  # this will look to find the most representative examples for each class
             idx = (a_y == _y)  # get the indicies of the labels that are equal to the current label
-            _x, _y, _l = a_x[idx], a_y[idx], a_l[idx]  # get the inputs, labels and logits
+            _x, _y, _l = a_x[idx], a_y[idx], a_l[idx]  # get the inputs, labels and logits for the current class
             feats = a_f[idx]  # get the features
             mean_feat = feats.mean(0, keepdim=True)  # get the mean of the features
 
@@ -211,7 +218,7 @@ class Buffer:
             i = 0
             while i < samples_per_class and i < feats.shape[
                 0]:  # while the number of samples per class is less than the number of features
-                cost = (mean_feat - (feats + running_sum) / (i + 1)).norm(2,
+                cost = (mean_feat - (feats + running_sum) / (i + 1)).norm(2, # calculate the difference the mean features and all features and get the smallest diff
                                                                           1)  # calculate the cost which is the norm of the mean features minus the features plus the running sum divided by i+1
 
                 idx_min = cost.argmin().item()  # get the index of the minimum cost
