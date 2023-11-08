@@ -1,3 +1,4 @@
+import json
 import os
 import argparse
 import shutil
@@ -157,10 +158,10 @@ parser.add_argument('--is-two-dim', type=bool, default=False, help='indicate if 
 
 prune_parse_arguments(parser)
 # args = parser.parse_args()
-total_epochs = 500
+total_epochs = 20
 test_har = True
 herding = False
-dynamic = True
+dynamic = False
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
@@ -176,7 +177,7 @@ args = argparse.Namespace(
     s=0.0001,
     batch_size=32,
     test_batch_size=256,
-    epochs=500,
+    epochs=800,
     optmzr='sgd',
     lr=0.03,
     lr_decay=60,
@@ -201,7 +202,7 @@ args = argparse.Namespace(
     sparsity_type='random-pattern',
     config_file='config_vgg16',
     use_cl_mask=True,
-    buffer_size=500,
+    buffer_size=800,
     buffer_weight=0.1,
     buffer_weight_beta=0.5,
     # dataset='seq-cifar10',
@@ -492,7 +493,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                         transform=dataset.get_transform())  # you will try to get get your logits as close as possible to the logits in the buffer (regularizes) want to predict similarly to past predictions to preserve prediction
                     # you will need to transform the logits if you have a dynamic architecture
 
-                    if args.arch_type == "dynamic":
+                    if dynamic:
                         buf_logits = buf_logits.cpu()
                         imbalanced_logits = len(buf_logits[0]) != model.layer2.out_features
 
@@ -974,7 +975,10 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
             else:
                 sys.exit("resnet doesn't implement those depth!")
         elif args.arch == "simple":
-            model = InOut(96, 2) # start with 2 classes
+            if dynamic:
+                model = InOut(96, 2) # start with 2 classes
+            else:
+                model = InOut(96,6)
         else:
             sys.exit("wrong arch!")
 
@@ -1061,7 +1065,7 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
     # example_stats_train = {}  # change name because fogetting function also have example_stats
     task_valid_info = {}
 
-    epoch_info = {}
+
     for t in range(dataset.N_TASKS):  # for each copntinaul learning task set out
         example_stats_train = {}
 
@@ -1130,8 +1134,11 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
             cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (
                         t + 1) * dataset.N_CLASSES_PER_TASK)  # this creates an array of values that represent the claseses present for the current task being learned ex: first iter -> [0,1] number of classes in this task
             # print(cur_classes, "first part of the mask") # below will get the classes not in current task
-            cl_mask = np.setdiff1d(np.arange(model.layer2.out_features), # this will now get the classes not in the current task but allows a dynamic architecture
+            if dynamic:
+                cl_mask = np.setdiff1d(np.arange(model.layer2.out_features), # this will now get the classes not in the current task but allows a dynamic architecture
                                    cur_classes)  # this will find the difference betweeen the two arrays so this will find difference between [0,...num_classes] and [0,1] (the classes in the current task) this returns the values present in the first not in the second
+            else:
+                cl_mask = np.setdiff1d(np.arange(dataset.TOTAL_CLASSES), cur_classes)
             # print(cl_mask, "second part of the mask ") #the first iter should be [2,3,4,...,9] because those are the values present in all the classes not in the first
             # creates way to mask  the other classes out from the output
             # f.close()
@@ -1239,7 +1246,9 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
                 if run_num is not None and run_num==0: # you can perform early stopping only on the first run
                     if early_stopping.check(total_loss):
                         # set the epoch information so that the next run knows
-                        epoch_info[t] = epoch
+                        if epoch_info is None:
+                            epoch_info = {}
+                        epoch_info[t] = epoch+1
                         print('Early stopping at epoch: ', epoch)
                         acc_list, til_acc_list = evaluate(model, dataset)
                         prec1 = sum(acc_list) / (t + 1)
@@ -1276,7 +1285,10 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
             if epoch % args.test_epoch_interval == 10 or epoch == (total_epochs - 1):
             #if epoch % args.test_epoch_interval == 10 or epoch == (int(args.epochs / dataset.N_TASKS) - 1):
                 acc_list, til_acc_list = evaluate(model, dataset)
-                epoch_info[t] = epoch
+                if nums_run == 0:
+                    if epoch_info is None:
+                        epoch_info = {}
+                    epoch_info[t] = epoch
                 prec1 = sum(acc_list) / (t + 1)
                 til_prec1 = sum(til_acc_list) / (t + 1)
                 acc_matrix[t] = acc_list
@@ -1323,7 +1335,7 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
             buffer.fill_buffer(model, dataset,t)
 
         # at the end of the task you will extend the model
-        if args.arch_type:
+        if dynamic:
             model.extend_fc_layer(dataset.N_CLASSES_PER_TASK) # it will add n classes to the prediction
 
     test(model, dataset)
@@ -1338,6 +1350,7 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
 def process_validations(valids, modal_type):
 
     first = valids[0]
+
     # go through each of the keys
     for task in first.keys():
         print(task)
@@ -1346,6 +1359,7 @@ def process_validations(valids, modal_type):
                     first[task][epoch]['individual']):  # these are the stats at each epoch for each task
                 # get all the accuracies for all runs at this point
                 for j, stat in enumerate(epoch_task.keys()):
+                    print(stat, 'this is the stat being run on')
                     # collect the stat across all runs
                     all_run_stat = np.array([x[task][epoch]['individual'][i][stat] for x in valids])
                     stat_mean = np.mean(all_run_stat)
@@ -1365,6 +1379,7 @@ if __name__ == '__main__':
         'gyro': 'HHAR/20231103-182025_hhar_features_gyro.pkl',
         'accel': 'HHAR/20231104-162132_hhar_features_accel.pkl'
     }
+
     for dataset in run_files.keys():
         validations = []
         # epochs = 500

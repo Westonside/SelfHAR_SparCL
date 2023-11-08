@@ -25,24 +25,24 @@ class InOut(nn.Module):
         if self.layer2 is not None:
             old = self.layer2
             with torch.no_grad():
-                new_fc = nn.Linear(old.in_features, old.out_features + new_classes)
+                new_fc = nn.Linear(old.in_features, old.out_features + new_classes).cuda()
                 w = torch.nn.init.kaiming_normal_(new_fc.weight.data, nonlinearity='relu', mode='fan_in', a=0)
                 new_fc.weight.data = w  # set the randomly initialized weights to the new layer
                 # this results in only the new classes being randomly initialized
             try:
-                weight = copy.deepcopy(old.weight.data) #copy the weights from the old layer
-                new_fc.weight.data[:old.out_features] = weight # set the weights to the new layer
+                weight = copy.deepcopy(self.layer2.weight.data) #copy the weights from the old layer
+                new_fc.weight.data[:self.layer2.out_features] = weight # set the weights to the new layer
 
                 if old.bias is not None:
                     bias = copy.deepcopy(old.bias.data)
                     new_fc.bias.data[:old.out_features] = bias
             except:
-                nb_output = self.fc.module.out_features
-                weight = copy.deepcopy(self.fc.module.weight.data)
+                nb_output = self.layer2.module.out_features
+                weight = copy.deepcopy(self.layer2.module.weight.data)
                 new_fc.weight.data[:nb_output] = weight
 
-                if self.fc.module.bias is not None:
-                    bias = copy.deepcopy(self.fc.module.bias.data)
+                if self.layer2.module.bias is not None:
+                    bias = copy.deepcopy(self.layer2.module.bias.data)
                     new_fc.bias.data[:nb_output] = bias
 
             del self.layer2
