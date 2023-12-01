@@ -12,12 +12,13 @@ class InOut(nn.Module):
         # self.flatten = nn.Flatten()
         self.layer1 = nn.Linear(in_planes, 512) # pass to hidden layer of 512
         self.layer2 = nn.Linear(512, classes)
+        self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         # x = self.flatten(x)
         x = torch.relu(self.layer1(x))
         x = self.layer2(x)
-        return x
+        return self.softmax(x)
 
 
     def extend_fc_layer(self, new_classes: int):
