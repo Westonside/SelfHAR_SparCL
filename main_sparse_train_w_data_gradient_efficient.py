@@ -15,6 +15,8 @@ import copy
 import utils.model_utils
 from datasets.hhar_features import SequentialHHAR
 import time
+
+from datasets.multi_modal_clustering_dataset import MultiModalClusteringDataset
 from models.in_out_model import InOut
 # from models.resnet32_cifar10_grasp import resnet32
 # from models.vgg_grasp import vgg19, vgg16
@@ -34,6 +36,7 @@ from prune_utils import *
 from datasets import get_dataset, SequentialMultiModalFeatures
 from utils import dynamic_architecture_util
 from utils.buffer import Buffer
+from utils.stats import calculate_f1_scores
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch CIFAR training')
@@ -162,23 +165,22 @@ total_epochs = 20
 test_har = True
 herding = False
 dynamic = False
-early_stop = False
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
     patience=15,
     # arch='resnet',
-    shuffle=False,
+    shuffle=False if test_har else False,
     # modal_file='HHAR/gyro_motion_hhar.pkl',
-    modal_file='../SensorBasedTransformerTorch/datasets/processed/',
-    buffer_mode='herding' if herding else 'reservoir',
+    modal_file='HHAR/accel_motion_hhar.pkl',
+    buffer_mode='herding' if  herding else 'reservoir',
     depth=18,
     workers=4,
     multi_gpu=False,
     s=0.0001,
-    batch_size=128,
+    batch_size=32,
     test_batch_size=256,
-    epochs=4,
+    epochs=800,
     optmzr='sgd',
     lr=0.03,
     lr_decay=60,
@@ -256,6 +258,7 @@ args = argparse.Namespace(
     mask_update_decay_epoch='5-45',
     cuda=True
 )
+
 # torch.backends.cudnn.deterministic = True
 # torch.backends.cudnn.benchmark = False
 
@@ -360,10 +363,8 @@ class GradualWarmupScheduler(_LRScheduler):
 
 
 def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, dataset,
-          #TODO: THE model is getting caught only guessing the last few datasets over and over
           # t is the task id in the dataset
           example_stats_train, train_indx, maskretrain, masks, cl_mask=None, task_dict=None):
-    #t1 datasize 51324
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -405,6 +406,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         not_transformed_inputs = torch.stack(
             not_transformed_trainset)  # this stacks the tranformed and non trasnformed samples per batch
         targets = torch.LongTensor(np.array(trainset.targets)[batch_inds].tolist())  # turn targets to a tensor
+
         # Map to available device
         inputs = inputs.cuda(non_blocking=True)  # move to gpu
         targets = targets.cuda(non_blocking=True)  # move to gpu
@@ -587,7 +589,6 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         correct += predicted.eq(
             targets.data).cpu().sum()  # add the total correct predictions for this batch to the counter
         loss.backward()  # backpropagate the loss
-        # scheduler.step()
         if args.gradient_efficient:  # if grad efficient
             prune_apply_masks_on_grads_efficient()
         elif args.gradient_efficient_mix:  # if mixed grad efficient
@@ -715,7 +716,6 @@ def validation(model, dataset, epoch, task, task_dict):
     with torch.no_grad():
         total_correct = 0
         total_loss = 0
-
         for t in range(task + 1):  # go up to that task
             cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (t + 1) * dataset.N_CLASSES_PER_TASK)
             # task_valid_loss = 0
@@ -836,7 +836,6 @@ def evaluate(model, dataset, last=False, test=False):
                 correct += torch.sum(pred == labels).item()  # get th ecorrect items
                 total += labels.shape[0]  # increment the total inputs
 
-                # if dataset.SETTING == 'class-il':
                 mask_classes(outputs, dataset, k)
                 _, pred = torch.max(outputs.data, 1)
                 correct_mask_classes += torch.sum(pred == labels).item()
@@ -853,6 +852,10 @@ def evaluate(model, dataset, last=False, test=False):
 
     print("*" * 50, "Confusion Matrix", "*" * 50)
     print('\n\n', confusion, '\n')
+    if test:
+        micro_f1, macro_f1 = calculate_f1_scores(confusion)
+        print('Micro F1 Score: ', micro_f1)
+        print('Macro F1 Score: ', macro_f1)
     # with open('testing_restults_LOOK.txt', 'wb') as f:
     #     f.write(f"{confusion}")
     return accs, accs_mask_classes
@@ -950,15 +953,6 @@ def check_filename(fname, args_list):
             return 0
 
     return 1
-
-def buffer_class_percentage(buffer, t):
-    _,labels,_ = buffer.get_all_data()
-    labels = labels.cpu()
-    counts = [{f'count_{x}': (torch.sum(labels == x).item() / len(labels) * 100.0) } for x in torch.unique(labels)]
-    print(t, counts)
-    # with open(f'task_buffer_info.txt', 'a+') as f:
-    #    f.write(json.dumps(counts, indent=2))
-
 
 
 # Format time for printing purposes
@@ -1081,8 +1075,8 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
     # example_stats_train = {}  # change name because fogetting function also have example_stats
     task_valid_info = {}
 
+
     for t in range(dataset.N_TASKS):  # for each copntinaul learning task set out
-        print('starting t ', t , '*'*100, 'dataset i', dataset.i)
         example_stats_train = {}
 
         optimizer_init_lr = args.warmup_lr if args.warmup else args.lr  # the learning rate to be used
@@ -1240,7 +1234,7 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
                         train_dataset.targets = np.array(
                             full_dataset.targets)[train_indx].tolist()
 
-                    # print('shape', train_dataset.data.shape)
+                    print('shape', train_dataset.data.shape)
                     print('len(train_dataset.targets)', len(train_dataset.targets))
 
                     # print('epoch after random ordered_examples len', len(ordered_examples))
@@ -1266,7 +1260,7 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
                             epoch_info = {}
                         epoch_info[t] = epoch+1
                         print('Early stopping at epoch: ', epoch)
-                        acc_list, til_acc_list = evaluate(model, dataset)
+                        acc_list, til_acc_list = evaluate(model, dataset, test==t==dataset.N_TASKS-1) # run if the last task
                         prec1 = sum(acc_list) / (t + 1)
                         til_prec1 = sum(til_acc_list) / (t + 1)
                         acc_matrix[t] = acc_list
@@ -1300,7 +1294,7 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
 
             if epoch % args.test_epoch_interval == 10 or epoch == (total_epochs - 1):
             #if epoch % args.test_epoch_interval == 10 or epoch == (int(args.epochs / dataset.N_TASKS) - 1):
-                acc_list, til_acc_list = evaluate(model, dataset)
+                acc_list, til_acc_list = evaluate(model, dataset, test=t==dataset.N_TASKS-1) # run if the last task
                 if nums_run == 0:
                     if epoch_info is None:
                         epoch_info = {}
