@@ -31,7 +31,7 @@ import random
 from prune_utils import *
 
 # CL dataset and buffer library
-from datasets import get_dataset
+from datasets import get_dataset, SequentialMultiModalFeatures
 from utils import dynamic_architecture_util
 from utils.buffer import Buffer
 
@@ -162,22 +162,23 @@ total_epochs = 20
 test_har = True
 herding = False
 dynamic = False
+early_stop = False
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
     patience=15,
     # arch='resnet',
-    shuffle=False if test_har else False,
+    shuffle=False,
     # modal_file='HHAR/gyro_motion_hhar.pkl',
-    modal_file='HHAR/accel_motion_hhar.pkl',
-    buffer_mode='herding' if  herding else 'reservoir',
+    modal_file='../SensorBasedTransformerTorch/datasets/processed/',
+    buffer_mode='herding' if herding else 'reservoir',
     depth=18,
     workers=4,
     multi_gpu=False,
     s=0.0001,
-    batch_size=32,
+    batch_size=128,
     test_batch_size=256,
-    epochs=800,
+    epochs=4,
     optmzr='sgd',
     lr=0.03,
     lr_decay=60,
@@ -201,12 +202,13 @@ args = argparse.Namespace(
     save_model='checkpoints/resnet18/paper/gradient_effi/mutate_irr/seq-cifar10/buffer_500/',
     sparsity_type='random-pattern',
     config_file='config_vgg16',
-    use_cl_mask=True,
+    use_cl_mask=False,
     buffer_size=800,
     buffer_weight=0.1,
     buffer_weight_beta=0.5,
     # dataset='seq-cifar10',
-    dataset='hhar_features' if test_har else 'seq-cifar10',
+    dataset='multi_modal_features',
+    # dataset='hhar_features' if test_har else 'seq-cifar10',
     validation=True,
     test_epoch_interval=1,
     evaluate_mode=False,
@@ -254,7 +256,6 @@ args = argparse.Namespace(
     mask_update_decay_epoch='5-45',
     cuda=True
 )
-
 # torch.backends.cudnn.deterministic = True
 # torch.backends.cudnn.benchmark = False
 
@@ -359,8 +360,10 @@ class GradualWarmupScheduler(_LRScheduler):
 
 
 def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, dataset,
+          #TODO: THE model is getting caught only guessing the last few datasets over and over
           # t is the task id in the dataset
           example_stats_train, train_indx, maskretrain, masks, cl_mask=None, task_dict=None):
+    #t1 datasize 51324
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -402,7 +405,6 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         not_transformed_inputs = torch.stack(
             not_transformed_trainset)  # this stacks the tranformed and non trasnformed samples per batch
         targets = torch.LongTensor(np.array(trainset.targets)[batch_inds].tolist())  # turn targets to a tensor
-
         # Map to available device
         inputs = inputs.cuda(non_blocking=True)  # move to gpu
         targets = targets.cuda(non_blocking=True)  # move to gpu
@@ -486,19 +488,19 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                     # buf_mse_loss = buf_mse_loss.mean()
                     ce_loss += args.buffer_weight * buf_mse_loss
 
-                elif args.replay_method == "derpp" and args.buffer_mode != 'herding':  # if you are using der++ this is our case you classify and get loss baesd off past predictions compared to current and then try to clasiify past tasks
+                elif args.replay_method == "derpp":  # if you are using der++ this is our case you classify and get loss baesd off past predictions compared to current and then try to clasiify past tasks
                     buf_inputs, _, buf_logits = buffer.get_data(
                         # get the input data and the past logits from the buffer
                         args.batch_size,
                         transform=dataset.get_transform())  # you will try to get get your logits as close as possible to the logits in the buffer (regularizes) want to predict similarly to past predictions to preserve prediction
                     # you will need to transform the logits if you have a dynamic architecture
 
-                    if dynamic:
-                        buf_logits = buf_logits.cpu()
-                        imbalanced_logits = len(buf_logits[0]) != model.layer2.out_features
-
-                        # Convert the list of tensors on the CPU
-                        buf_logits = dynamic_architecture_util.extend_array(buf_logits, model.layer2.out_features).cuda()
+                    # if dynamic:
+                    #     buf_logits = buf_logits.cpu()
+                    #     imbalanced_logits = len(buf_logits[0]) != model.layer2.out_features
+                    #
+                    #     # Convert the list of tensors on the CPU
+                    #     buf_logits = dynamic_architecture_util.extend_array(buf_logits, model.layer2.out_features).cuda()
 
 
                         # Move buf_logits back to the GPU
@@ -541,7 +543,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         # your loss will be the loss per item in the batch
 
         # loss = criterion(outputs, targets)
-        _, predicted = torch.max(outputs.data, 1)  # get the prediction label for all predictions in the batch
+        predicted = torch.argmax(outputs,1)
 
         # Update statistics and loss
         acc = predicted == targets  # get the predictions and see where the prediction was correct
@@ -585,6 +587,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         correct += predicted.eq(
             targets.data).cpu().sum()  # add the total correct predictions for this batch to the counter
         loss.backward()  # backpropagate the loss
+        # scheduler.step()
         if args.gradient_efficient:  # if grad efficient
             prune_apply_masks_on_grads_efficient()
         elif args.gradient_efficient_mix:  # if mixed grad efficient
@@ -614,16 +617,16 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
             buffer.add_data(examples=not_transformed_inputs, labels=targets)
         elif args.replay_method == 'der':
             buffer.add_data(examples=not_transformed_inputs, logits=outputs.data)
-        elif args.replay_method == 'derpp' and args.buffer_mode != 'herding':
-            if args.arch_type == 'dynamic' and t > 0 and imbalanced_logits: # if the first epoch and not the first task
-                #here you will have to clear the buffer and add in the larger logits values
-                _in, _lab, logits = buffer.get_all_data()
-                buffer.empty()
-                logits  = logits.cpu()
-                extended_buff = dynamic_architecture_util.extend_array(logits, model.layer2.out_features).cuda() # now that you have extended the
-                buffer.add_data(examples=_in, labels=_lab, logits=extended_buff)
-
-
+        elif (args.replay_method == 'derpp'):
+            # print('running derpp')
+              # and args.buffer_mode != 'herding'):
+            # if dynamic and  t > 0 and imbalanced_logits: # if the first epoch and not the first task
+            #     #here you will have to clear the buffer and add in the larger logits values
+            #     _in, _lab, logits = buffer.get_all_data()
+            #     buffer.empty()
+            #     logits  = logits.cpu()
+            #     extended_buff = dynamic_architecture_util.extend_array(logits, model.layer2.out_features).cuda() # now that you have extended the
+            #     buffer.add_data(examples=_in, labels=_lab, logits=extended_buff)
             buffer.add_data(examples=not_transformed_inputs, labels=targets, logits=outputs.data)
 
         if batch_idx % 10 == 0:  # if the batch index is divisble by 10
@@ -712,6 +715,7 @@ def validation(model, dataset, epoch, task, task_dict):
     with torch.no_grad():
         total_correct = 0
         total_loss = 0
+
         for t in range(task + 1):  # go up to that task
             cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (t + 1) * dataset.N_CLASSES_PER_TASK)
             # task_valid_loss = 0
@@ -947,6 +951,15 @@ def check_filename(fname, args_list):
 
     return 1
 
+def buffer_class_percentage(buffer, t):
+    _,labels,_ = buffer.get_all_data()
+    labels = labels.cpu()
+    counts = [{f'count_{x}': (torch.sum(labels == x).item() / len(labels) * 100.0) } for x in torch.unique(labels)]
+    print(t, counts)
+    # with open(f'task_buffer_info.txt', 'a+') as f:
+    #    f.write(json.dumps(counts, indent=2))
+
+
 
 # Format time for printing purposes
 def get_hms(seconds):
@@ -956,7 +969,8 @@ def get_hms(seconds):
     return h, m, s
 
 
-def sparCL(args, data_location=None, run_num=None, epoch_info=None):
+def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None):
+    args.dataset=dataset_name
     if args.cuda:
         if args.arch == "vgg":
             if args.depth == 19:
@@ -975,8 +989,10 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
             else:
                 sys.exit("resnet doesn't implement those depth!")
         elif args.arch == "simple":
-            if dynamic:
-                model = InOut(96, 2) # start with 2 classes
+            # if dynamic:
+            #     model = InOut(96, 2) # start with 2 classes
+            if dataset_name == 'multi_modal_features':
+                model = InOut(2048,8)
             else:
                 model = InOut(96,6)
         else:
@@ -988,7 +1004,7 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
 
     criterion = nn.CrossEntropyLoss().cuda()
     criterion.__init__(reduce=False)
-    early_stopping = utils.model_utils.EarlyStop(patience=args.patience)
+    early_stopping = utils.model_utils.EarlyStop(patience=args.patience, testing=False)
 
 
     # ----------- load checkpoint ---------------------
@@ -1045,7 +1061,7 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
     # CL buffer and dataset setup
     dataset = get_dataset(args)
     global is_two_dim, total_epochs
-    is_two_dim = args.dataset in [SequentialHHAR.NAME]
+    is_two_dim = args.dataset in [SequentialHHAR.NAME, SequentialMultiModalFeatures.NAME]
     print('*' * 100)
     print('dataset', args)
 
@@ -1065,8 +1081,8 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
     # example_stats_train = {}  # change name because fogetting function also have example_stats
     task_valid_info = {}
 
-
     for t in range(dataset.N_TASKS):  # for each copntinaul learning task set out
+        print('starting t ', t , '*'*100, 'dataset i', dataset.i)
         example_stats_train = {}
 
         optimizer_init_lr = args.warmup_lr if args.warmup else args.lr  # the learning rate to be used
@@ -1134,11 +1150,11 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
             cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (
                         t + 1) * dataset.N_CLASSES_PER_TASK)  # this creates an array of values that represent the claseses present for the current task being learned ex: first iter -> [0,1] number of classes in this task
             # print(cur_classes, "first part of the mask") # below will get the classes not in current task
-            if dynamic:
-                cl_mask = np.setdiff1d(np.arange(model.layer2.out_features), # this will now get the classes not in the current task but allows a dynamic architecture
-                                   cur_classes)  # this will find the difference betweeen the two arrays so this will find difference between [0,...num_classes] and [0,1] (the classes in the current task) this returns the values present in the first not in the second
-            else:
-                cl_mask = np.setdiff1d(np.arange(dataset.TOTAL_CLASSES), cur_classes)
+            # if dynamic:
+            #     cl_mask = np.setdiff1d(np.arange(model.layer2.out_features), # this will now get the classes not in the current task but allows a dynamic architecture
+            #                        cur_classes)  # this will find the difference betweeen the two arrays so this will find difference between [0,...num_classes] and [0,1] (the classes in the current task) this returns the values present in the first not in the second
+            # else:
+            cl_mask = np.setdiff1d(np.arange(dataset.TOTAL_CLASSES), cur_classes)
             # print(cl_mask, "second part of the mask ") #the first iter should be [2,3,4,...,9] because those are the values present in all the classes not in the first
             # creates way to mask  the other classes out from the output
             # f.close()
@@ -1224,7 +1240,7 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
                         train_dataset.targets = np.array(
                             full_dataset.targets)[train_indx].tolist()
 
-                    print('shape', train_dataset.data.shape)
+                    # print('shape', train_dataset.data.shape)
                     print('len(train_dataset.targets)', len(train_dataset.targets))
 
                     # print('epoch after random ordered_examples len', len(ordered_examples))
@@ -1243,7 +1259,7 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
                 print("=" * 120, 'validation')
                 total_loss = validation(model, dataset, epoch, t, task_valid_info)
                 print("Total Validation Loss: ", total_loss)
-                if run_num is not None and run_num==0: # you can perform early stopping only on the first run
+                if run_num is not None and run_num==0 and early_stop: # you can perform early stopping only on the first run
                     if early_stopping.check(total_loss):
                         # set the epoch information so that the next run knows
                         if epoch_info is None:
@@ -1331,12 +1347,16 @@ def sparCL(args, data_location=None, run_num=None, epoch_info=None):
                                                                                                        t)
         torch.save(model.state_dict(), filename)
         # at the end of the training of the task fill the buffer with examples
-        if args.buffer_mode == 'herding':
-            buffer.fill_buffer(model, dataset,t)
+        # if args.buffer_mode == 'herding':
+        #     print('herding')
+        #     buffer.fill_buffer(model, dataset,t)
 
         # at the end of the task you will extend the model
-        if dynamic:
-            model.extend_fc_layer(dataset.N_CLASSES_PER_TASK) # it will add n classes to the prediction
+        # if dynamic:
+        #     print('running dynamic')
+        #     model.extend_fc_layer(dataset.N_CLASSES_PER_TASK) # it will add n classes to the prediction
+        # buffer_class_percentage(buffer,t  )
+
 
     test(model, dataset)
     # dump the validation data
@@ -1375,17 +1395,25 @@ def process_validations(valids, modal_type):
 if __name__ == '__main__':
     nums_run = 5
 
+    # run_files = {
+    #     'gyro': 'HHAR/20231103-182025_hhar_features_gyro.pkl',
+    #     'accel': 'HHAR/20231104-162132_hhar_features_accel.pkl'
+    # }
+    cnn_features = False
     run_files = {
-        'gyro': 'HHAR/20231103-182025_hhar_features_gyro.pkl',
-        'accel': 'HHAR/20231104-162132_hhar_features_accel.pkl'
+        'accel': '../SensorBasedTransformerTorch/extracted_features/multi_modal_extracted_features.hkl'
     }
-
+    # run_files = {
+    #     'accel': '../selfhar_testing/20231204-014303_SHL_features_accel.hkl',
+    #     'gyro': '../selfhar_testing/20231204-023349_SHL_features_gyro.hkl'
+    # }
+    dataset_name = 'multi_modal_features'  if not cnn_features else 'hhar_features'
     for dataset in run_files.keys():
         validations = []
         # epochs = 500
         epoch_information = None
         for i in range(nums_run): # this will run n times to be averaged
-            valid_info, epoch_info = sparCL(args, run_files[dataset], run_num=i, epoch_info=epoch_information)
+            valid_info, epoch_info = sparCL(args, dataset_name, run_files[dataset],run_num=i, epoch_info=epoch_information)
             if i == 0:
                 epoch_information = epoch_info
             validations.append(valid_info)

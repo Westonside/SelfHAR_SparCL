@@ -11,12 +11,17 @@ class InOut(nn.Module):
         super(InOut, self).__init__()
         # self.flatten = nn.Flatten()
         self.layer1 = nn.Linear(in_planes, 512) # pass to hidden layer of 512
+        self.dropout = nn.Dropout(p=0.3)
+        self.relu = nn.ReLU()
+
         self.layer2 = nn.Linear(512, classes)
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         # x = self.flatten(x)
-        x = torch.relu(self.layer1(x))
+        x = self.layer1(x)
+        x = self.relu(x)
+        x = self.dropout(x)
         x = self.layer2(x)
         return self.softmax(x)
 

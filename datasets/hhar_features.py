@@ -1,5 +1,6 @@
 from argparse import Namespace
 
+import hickle
 import numpy as np
 import sklearn.model_selection
 import torch
@@ -81,37 +82,40 @@ class SequentialHHAR(ContinualDataset):
 
     def __init__(self, args: Namespace):
         # load the data
-        try:
-            try:
-                file = args.modal_file
-            except:
-                file = 'HHAR/hhar_features.pkl'
+        data = hickle.load(args.modal_file)
+        print('testing')
 
-            with open(base_path() + file, 'rb') as f:
-                self.t = 0
-                data = pickle.load(f)
-                # shuffle the data
-                if args.shuffle:
-                    shuf_data, shuf_labels = shuffle_data(data['features'], data['labels'])
-                    data['features'] = shuf_data
-                    data['labels'] = shuf_labels
-                self.data = data['features']
-                self.labels = data['labels']
-                self.label_map = data['label_map']
-                if args.validation:
-                    X_train, X_temp, y_train, y_temp = sklearn.model_selection.train_test_split(self.data, self.labels, test_size=0.2)
-                    X_test, X_val, y_test, y_val = sklearn.model_selection.train_test_split(X_temp, y_temp, test_size=0.5)
-                    self.train = (X_train, y_train)
-                    self.validation = (X_val, y_val)
-                    self.test = (X_test, y_test)
-                else:
-                    X_train, X_test, y_train, y_test =  sklearn.model_selection.train_test_split(self.data, self.labels, train_size=0.8)
-                    self.train = (X_train, y_train)
-                    self.test = (X_test, y_test)
-                self.classes = [x for x in self.label_map]
-        except Exception:
-            print("Invalid data path!")
-            exit(1)
+        # try:
+        #     try:
+        #         file = args.modal_file
+        #     except:
+        #         file = 'HHAR/hhar_features.pkl'
+        #
+        #     with open(base_path() + file, 'rb') as f:
+        #         self.t = 0
+        #         data = pickle.load(f)
+        #         # shuffle the data
+        #         if args.shuffle:
+        #             shuf_data, shuf_labels = shuffle_data(data['features'], data['labels'])
+        #             data['features'] = shuf_data
+        #             data['labels'] = shuf_labels
+        #         self.data = data['features']
+        #         self.labels = data['labels']
+        #         self.label_map = data['label_map']
+        #         if args.validation:
+        #             X_train, X_temp, y_train, y_temp = sklearn.model_selection.train_test_split(self.data, self.labels, test_size=0.2)
+        #             X_test, X_val, y_test, y_val = sklearn.model_selection.train_test_split(X_temp, y_temp, test_size=0.5)
+        #             self.train = (X_train, y_train)
+        #             self.validation = (X_val, y_val)
+        #             self.test = (X_test, y_test)
+        #         else:
+        #             X_train, X_test, y_train, y_test =  sklearn.model_selection.train_test_split(self.data, self.labels, train_size=0.8)
+        #             self.train = (X_train, y_train)
+        #             self.test = (X_test, y_test)
+        #         self.classes = [x for x in self.label_map]
+        # except Exception:
+        #     print("Invalid data path!")
+        #     exit(1)
         super().__init__(args)
 
     def get_data_loaders(self, return_dataset=False) -> Tuple[DataLoader, DataLoader]:
