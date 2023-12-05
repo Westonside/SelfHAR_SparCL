@@ -2,7 +2,7 @@
 # All rights reserved.
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
-
+from datasets.multimodal_features import SequentialMultiModalFeatures
 from datasets.seq_mnist import SequentialMNIST
 from datasets.seq_cifar10 import SequentialCIFAR10
 from datasets.seq_cifar100 import SequentialCIFAR100
@@ -15,8 +15,8 @@ NAMES = {
     SequentialCIFAR10.NAME: SequentialCIFAR10,
     SequentialCIFAR100.NAME: SequentialCIFAR100,
     SequentialHHAR.NAME: SequentialHHAR,
-    SequentialHHAR.GYRO: SequentialHHAR
-
+    SequentialHHAR.GYRO: SequentialHHAR,
+    SequentialMultiModalFeatures.NAME: SequentialMultiModalFeatures,
 }
 
 
