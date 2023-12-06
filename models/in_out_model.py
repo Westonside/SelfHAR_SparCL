@@ -23,7 +23,7 @@ class InOut(nn.Module):
         x = self.relu(x)
         x = self.dropout(x)
         x = self.layer2(x)
-        return self.softmax(x)
+        return x
 
 
     def extend_fc_layer(self, new_classes: int):

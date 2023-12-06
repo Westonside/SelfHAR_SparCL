@@ -69,7 +69,7 @@ parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
-                    help='disables CUDA training')
+                    help='disabls CUDA training')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 
@@ -165,6 +165,7 @@ total_epochs = 20
 test_har = True
 herding = False
 dynamic = False
+early_stop = True
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
@@ -178,9 +179,9 @@ args = argparse.Namespace(
     workers=4,
     multi_gpu=False,
     s=0.0001,
-    batch_size=32,
+    batch_size=128,
     test_batch_size=256,
-    epochs=800,
+    epochs=500,
     optmzr='sgd',
     lr=0.03,
     lr_decay=60,
@@ -478,6 +479,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                                         targets)  # calculate the loss for the classes in the current task
                 else:
                     ce_loss = criterion(outputs, targets)
+
                 # print(inputs.shape)
 
                 if args.replay_method == "der":  # if you are using der
@@ -763,8 +765,13 @@ def test(model, dataset):
     model.eval()
     acc_list = np.zeros((dataset.N_TASKS,))
     til_acc_list = np.zeros((dataset.N_TASKS,))
+    confusion = np.zeros((dataset.N_CLASSES_PER_TASK, dataset.N_CLASSES_PER_TASK), dtype=np.uint64)
     with torch.no_grad():
         for task, test_loader in enumerate(dataset.test_loaders):
+            predictions = {
+                'predictions': [],
+                'labels': [],
+            }
             test_loss = 0
             correct = 0
             til_correct = 0
@@ -782,6 +789,10 @@ def test(model, dataset):
                 test_loss = criterion(output, target)
                 # test_loss += F.cross_entropy(output, target, size_average=False).data[0] # sum up batch loss
                 pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
+                predictions['predictions'].extend(pred.tolist())
+                predictions['labels'].extend(target.tolist())
+
+
                 # pred for task incremental
                 mask_classes(output, dataset, task)
                 til_pred = output.data.max(1, keepdim=True)[1]
@@ -794,9 +805,12 @@ def test(model, dataset):
             acc_list[task] = acc
             til_acc_list[task] = til_acc
             print(
-                f"Task {task}, Average loss {test_loss:.4f}, Class inc Accuracy {acc:.3f}, Task inc Accuracy {til_acc:.3f}")
+                    f"Task {task}, Average loss {test_loss:.4f}, Class inc Accuracy {acc:.3f}, Task inc Accuracy {til_acc:.3f}")
+    micro_f1, macro_f1 = calculate_f1_scores(confusion)
+    print('Micro F1 Score: ', micro_f1)
+    print('Macro F1 Score: ', macro_f1)
 
-    return acc_list, til_acc_list
+    return acc_list, til_acc_list, micro_f1, macro_f1
 
 
 def evaluate(model, dataset, last=False, test=False):
@@ -808,56 +822,57 @@ def evaluate(model, dataset, last=False, test=False):
              and task-il accuracy for each task
     """
     model.eval()
+
     accs = np.zeros((dataset.N_TASKS,))
     accs_mask_classes = np.zeros((dataset.N_TASKS,))
-    confusion = [np.zeros((dataset.TOTAL_CLASSES, dataset.TOTAL_CLASSES), dtype=int) for _ in range(dataset.N_TASKS)]
+    confusion = np.zeros((dataset.TOTAL_CLASSES, dataset.TOTAL_CLASSES), dtype=np.uint64)
+
     for k, test_loader in enumerate(dataset.test_loaders):
-        if last and k < len(dataset.test_loaders) - 1:
+        if last and k < len(dataset.test_loaders) - 1: # the test loader is batching the test data into 158 batches of 128
             continue
         correct, correct_mask_classes, total = 0.0, 0.0, 0.0
         predictions = {
             'predictions': [],
             'labels': [],
         }
-        for data in test_loader:
+
+        # print(test_loader.data)
+        for data in test_loader: # the batched data in the loader
+            # print('testing ', data)
             with torch.no_grad():
                 if len(data) == 3:
                     inputs, labels, _ = data
                 else:
-                    inputs, labels = data
+                    inputs, labels = data #the data
 
                 predictions['labels'].extend(labels.tolist())
                 inputs, labels = inputs.cuda(), labels.cuda()
 
                 outputs = model(inputs)  # predict on the input
 
-                _, pred = torch.max(outputs.data, 1)  # get the predictions
+                pred = torch.argmax(outputs, dim=1)
                 predictions['predictions'].extend(pred.tolist())
                 correct += torch.sum(pred == labels).item()  # get th ecorrect items
+
+
                 total += labels.shape[0]  # increment the total inputs
 
                 mask_classes(outputs, dataset, k)
                 _, pred = torch.max(outputs.data, 1)
                 correct_mask_classes += torch.sum(pred == labels).item()
-
+        if total == 0.0:
+            continue
         accs[k] = correct / total * 100
         accs_mask_classes[k] = correct_mask_classes / total * 100
         # here you will update the confusion matrix at that index
-        matrix = confusion[k]
         for i, answer in enumerate(predictions['labels']):
             # go through the answer and mark if it was a false positive or not
-            matrix[answer][predictions['predictions'][i]] += 1
+            confusion[answer][predictions['predictions'][i]] += 1
 
-        confusion[k] = matrix
+
 
     print("*" * 50, "Confusion Matrix", "*" * 50)
     print('\n\n', confusion, '\n')
-    if test:
-        micro_f1, macro_f1 = calculate_f1_scores(confusion)
-        print('Micro F1 Score: ', micro_f1)
-        print('Macro F1 Score: ', macro_f1)
-    # with open('testing_restults_LOOK.txt', 'wb') as f:
-    #     f.write(f"{confusion}")
     return accs, accs_mask_classes
 
 
@@ -964,6 +979,7 @@ def get_hms(seconds):
 
 
 def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None):
+    print('starting with ', data_location)
     args.dataset=dataset_name
     if args.cuda:
         if args.arch == "vgg":
@@ -1260,7 +1276,7 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
                             epoch_info = {}
                         epoch_info[t] = epoch+1
                         print('Early stopping at epoch: ', epoch)
-                        acc_list, til_acc_list = evaluate(model, dataset, test==t==dataset.N_TASKS-1) # run if the last task
+                        acc_list, til_acc_list = evaluate(model, dataset, test=t==dataset.N_TASKS-1 and epoch == (total_epochs-1)) # run if the last task
                         prec1 = sum(acc_list) / (t + 1)
                         til_prec1 = sum(til_acc_list) / (t + 1)
                         acc_matrix[t] = acc_list
@@ -1294,7 +1310,9 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
 
             if epoch % args.test_epoch_interval == 10 or epoch == (total_epochs - 1):
             #if epoch % args.test_epoch_interval == 10 or epoch == (int(args.epochs / dataset.N_TASKS) - 1):
-                acc_list, til_acc_list = evaluate(model, dataset, test=t==dataset.N_TASKS-1) # run if the last task
+                print(t, 'running the eval stage')
+                acc_list, til_acc_list = evaluate(model, dataset, test=t==dataset.N_TASKS-1 and epoch == (total_epochs-1)) # run if the last task
+
                 if nums_run == 0:
                     if epoch_info is None:
                         epoch_info = {}
@@ -1352,7 +1370,10 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
         # buffer_class_percentage(buffer,t  )
 
 
-    test(model, dataset)
+    _,_,f1_micro, f1_macro = test(model, dataset)
+    with open('results_file.txt', 'a')as f:
+        val = f"{args.modal_file}: {f1_micro, f1_macro}"
+        f.write(val)
     # dump the validation data
 
     run_file = 'HHAR/hhar_features.pkl' if args.modal_file is None else 'gyro'
@@ -1387,23 +1408,38 @@ def process_validations(valids, modal_type):
 
 
 if __name__ == '__main__':
-    nums_run = 5
+    nums_run = 1
 
     # run_files = {
     #     'gyro': 'HHAR/20231103-182025_hhar_features_gyro.pkl',
     #     'accel': 'HHAR/20231104-162132_hhar_features_accel.pkl'
     # }
     cnn_features = False
-    run_files = {
-        'accel': '../SensorBasedTransformerTorch/extracted_features/multi_modal_extracted_features.hkl'
-    }
     # run_files = {
-    #     'accel': '../selfhar_testing/20231204-014303_SHL_features_accel.hkl',
-    #     'gyro': '../selfhar_testing/20231204-023349_SHL_features_gyro.hkl'
+    #     'both': '../SensorBasedTransformerTorch/extracted_features/multi_modal_extracted_features.hkl'
     # }
-    dataset_name = 'multi_modal_features'  if not cnn_features else 'hhar_features'
+
+
+
+    # run_files = {
+    #     'accel': '../selfhar_testing/',
+    #     'gyro': '../selfhar_testing/20231204-023349_SHL_features_gyro.hkl'
+    #
+    # }
+    cnn_dir = '../selfhar_testing/features_dir/'
+    clustering_dir = '../SensorBasedTransformerTorch/extracted_features/'
+    # get the cnn features
+    use_cnn = True
+    use_clustering = True
+    cnn = {f"cnn_accel{i}" if "accel" in x else f"cnn_gyro{i}": os.path.join(cnn_dir,x) for i, x in enumerate(os.listdir(cnn_dir))} if use_cnn else {}
+    clustering = {f"clustering{i}": os.path.join(clustering_dir,x) for i,x in enumerate(os.listdir(clustering_dir))} if use_clustering else {}
+
+
+    run_files = {**cnn, **clustering}
+
     for dataset in run_files.keys():
         validations = []
+        dataset_name = 'multi_modal_features' if "clustering" in dataset else 'hhar_features'
         # epochs = 500
         epoch_information = None
         for i in range(nums_run): # this will run n times to be averaged

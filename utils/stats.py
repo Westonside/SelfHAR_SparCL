@@ -13,9 +13,9 @@ def calculate_f1_scores(confusion_matrix):
     false_negatives = np.sum(confusion_matrix, axis=1) - true_positives # get the false negatives
 
     # the precision is the true positives / true positives + false positives
-    precision = true_positives / (true_positives + false_positives)
+    precision = np.nan_to_num(true_positives / (true_positives + false_positives))
     # the recall is the true positives / true positives + false negatives
-    recall = true_positives / (true_positives + false_negatives)
+    recall = np.nan_to_num(true_positives / (true_positives + false_negatives))
     # the f1 score is the harmonic mean of the precision and recall
     f1 = 2 * precision * recall / (precision + recall)
 
@@ -27,10 +27,20 @@ def calculate_f1_scores(confusion_matrix):
     micro_f1 = 2 * micro_precision * micro_recall / (micro_precision + micro_recall)
 
     #the macro f1 score is the average of the f1 scores across all class
-    macro_f1 = np.mean(f1)
+    macro_f1 = np.nanmean(f1)
 
     return micro_f1, macro_f1
 
 
+def testing_f1():
+    confusion = np.eye(3, dtype=np.uint64) * 20
+    for col in range(len(confusion)):
+        for row in range(confusion.shape[1]):
+            if col != row:
+                confusion[col][row] = 4
 
+    print(confusion)
+    print(calculate_f1_scores(confusion))
 
+if __name__ == '__main__':
+    testing_f1()

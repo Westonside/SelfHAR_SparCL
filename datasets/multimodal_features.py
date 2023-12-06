@@ -43,7 +43,7 @@ class SequentialMultiModalFeatures(ContinualDataset):
     SETTING = 'class-il'
     TRANSFORM = None
     N_TASKS = 4
-
+    #TODO: need to add a better train and test split because at the moment the test dataset only has 4 classes
     def __init__(self, args: Namespace):
         #load the file
         data = hkl.load(args.modal_file)

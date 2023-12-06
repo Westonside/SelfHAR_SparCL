@@ -7,6 +7,7 @@ import torch
 import torchvision.transforms as transforms
 # from backbone.ResNet18 import resnet18
 import torch.nn.functional as F
+from sklearn.model_selection import train_test_split
 from torch import nn as nn
 import pickle
 from datasets.utils import base_path
@@ -76,15 +77,25 @@ class SequentialHHAR(ContinualDataset):
     GYRO = 'hhar_features_gyro'
     SETTING = 'class-il'
     N_CLASSES_PER_TASK = 2
-    N_TASKS = 3
-    TOTAL_CLASSES = 6
+    N_TASKS = 4
+    TOTAL_CLASSES = 8
     TRANSFORM = None
 
     def __init__(self, args: Namespace):
         # load the data
         data = hickle.load(args.modal_file)
         print('testing')
+        self.train = data['train_features'], data['train_labels']
+        self.test = data['test_features'], data['test_labels']
+        if args.validation:
+            train_X, train_y = self.train
+            train_data, val_data, train_labels, val_labels = train_test_split(train_X, train_y, test_size=0.1,
+                             random_state=42)
 
+            self.train = train_data, train_labels
+            self.validation = val_data, val_labels
+        self.classes = []
+        self.label_map = []
         # try:
         #     try:
         #         file = args.modal_file
