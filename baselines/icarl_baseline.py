@@ -1,8 +1,11 @@
 import torch
+from avalanche.benchmarks.utils import AvalancheTensorDataset, make_tensor_classification_dataset
 from avalanche.evaluation.metrics import loss_metrics, accuracy_metrics, timing_metrics, forgetting_metrics
 from avalanche.logging import InteractiveLogger
 from avalanche.training.plugins import EvaluationPlugin
+from pytorchcv.model_provider import get_model as ptcv_get_model
 
+from avalanche.benchmarks.generators import nc_benchmark
 
 from models.in_out_model import InOut
 from avalanche.training import ICaRL, GEM, GDumb, JointTraining
@@ -23,6 +26,16 @@ strategy_fns = {
     "normal": setup_normal_train,
 }
 
+def get_scenario(train,test,n_tasks, n_classes):
+    return nc_benchmark(
+        train_dataset=train,
+        test_dataset=test,
+        n_experiences=n_tasks,
+        shuffle=True,
+        task_labels=False,
+        fixed_class_order=list(range(n_classes))
+    )
+
 def get_strategy(config):
     strat = list(config.keys())[0]
     return strategy_fns[strat]
@@ -32,7 +45,7 @@ input_shape = (128,3)
 def buffer_model_training(data, n_classes, configuration):
     print('testing')
     n_tasks = n_classes / 2
-    model = InOut(128, n_classes)
+    model = ptcv_get_model("quartz")
     lr = 0.03
     mom = None
     wd = None
@@ -40,25 +53,57 @@ def buffer_model_training(data, n_classes, configuration):
     strategy = get_strategy(configuration)(**configuration)
     crit = nn.CrossEntropyLoss()
 
+    train_data, train_labels = data['train_data']
+    test_data, test_labels = data['testing_data']
 
-eval_plugin = EvaluationPlugin(
-    accuracy_metrics(minibatch=True, epoch=True, experience=True, stream=True),
-    loss_metrics(minibatch=True, epoch=True, experience=True, stream=True),
-    timing_metrics(epoch=True),
-    forgetting_metrics(experience=True, stream=True),
-    loggers=[InteractiveLogger()],
-    benchmark=scenario,
-    strict_checks=False
-)
+    train_dataset = make_tensor_classification_dataset((train_data, train_labels))
+    test_dataset = make_tensor_classification_dataset((test_data, test_labels))
+
+
+    # avalanche.benchmarks.make_tensor_classification_dataset
+    scenario = nc_benchmark(
+        train_dataset=train_dataset,
+        test_dataset=test_dataset,
+        n_experiences=1,
+        shuffle=True,
+        task_labels=False
+    )
+
+    train_stream = scenario.train_stream
+    test_stream = scenario.test_stream
+    strat = get_strategy(configuration)(**configuration)
+    results = []
+    strat.train(train_stream)
+    results.append(strat.eval(test_stream))
+    print(results)
+def get_plugin(scenario):
+    eval_plugin = EvaluationPlugin(
+        accuracy_metrics(minibatch=True, epoch=True, experience=True, stream=True),
+        loss_metrics(minibatch=True, epoch=True, experience=True, stream=True),
+        timing_metrics(epoch=True),
+        forgetting_metrics(experience=True, stream=True),
+        loggers=[InteractiveLogger()],
+        benchmark=scenario,
+        strict_checks=False
+    )
 
 
 run_configurations = {
+    "normal":{
+        "mem_size": None,
+        "epochs": 80,
+        "batch_size": 64,
+        "train_mb_size": None,
+        "eval_mb_size": None,
+        "n_tasks": 1,
+    },
     "gdumb": {
         "mem_size": None,
         "epochs": 80,
         "batch_size": 64,
         "train_mb_size": None,
         "eval_mb_size": None,
+        "n_tasks": 4,
     }
 }
 
