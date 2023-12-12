@@ -1,0 +1,13 @@
+{
+  "configs": [
+    {
+      "cl_type": "ewc",
+      "model": "hart",
+      "log_file": "output_ewc_log.txt",
+      "files_dir": "../../SensorBasedTransformerTorch/datasets/processed/",
+      "files": ["SHL"],
+      "epochs": 60,
+      "batch_size":  64
+    }
+  ]
+}

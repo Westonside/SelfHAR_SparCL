@@ -1,0 +1,10 @@
+{
+    "configurations": :[
+        {
+            "type": "cnn_feature_extraction",
+            "files": "../../",
+            "model": "Simple"
+        }
+
+    ]
+}
