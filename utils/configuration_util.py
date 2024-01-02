@@ -56,6 +56,11 @@ def load_data_model(configuration, args, features=512, dropout=0.3):
     else:
         args.validation = False
 
+    if configuration.get("loss") is not None:
+        args.loss = configuration["loss"]
+    else:
+        args.loss = "ce"
+
     dataset = load_dataset(configuration["files"], configuration["type"], args)
     if configuration.get('balance_training') and configuration['balance_training']:
         balance_dataset(dataset)

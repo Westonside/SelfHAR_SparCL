@@ -39,6 +39,7 @@ from prune_utils import *
 from datasets import get_dataset, SequentialMultiModalFeatures
 from utils import dynamic_architecture_util
 from utils.buffer import Buffer
+from utils.combine import loss_fn
 from utils.configuration_util import load_config, load_data_model
 from utils.stats import calculate_f1_scores
 
@@ -175,6 +176,7 @@ args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
     patience=15,
+    loss="ce",
     # arch='resnet',
     shuffle=False if test_har else False,
     # modal_file='HHAR/gyro_motion_hhar.pkl',
@@ -477,7 +479,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                     inputs)  # predict on  the passed in inputs will have probability distribution for prediction
                 # add CL per task mask
 
-                if cl_mask is not None:  # if you have a cl mask then mask the other classes not used in this prediction
+                if cl_mask is not None and criterion:  # if you have a cl mask then mask the other classes not used in this prediction
                     mask_add_on = torch.zeros_like(outputs)  # make a tensor of 0s of len outputs
                     mask_add_on[:, cl_mask] = float(
                         '-inf')  # set the classes not used in the taks to be negative infinity
@@ -486,8 +488,8 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                                         targets)  # calculate the loss for the classes in the current task
                 else:
                     ce_loss = criterion(outputs, targets)
+                    # loss_fn(criterion,outputs,targets)
 
-                # print(inputs.shape)
 
                 if args.replay_method == "der":  # if you are using der
                     buf_inputs, buf_logits = buffer.get_data(
@@ -522,11 +524,10 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                         args.batch_size, transform=dataset.get_transform())
                     # print(buf_inputs.shape)
                     buf_output = model(buf_inputs)  # you will predict on this input
-                    buf_ce_loss = criterion(buf_output,
-                                            buf_labels)  # now you will calculate the loss by comparing the output to the class labels
-                    # print(ce_loss.shape, buf_ce_loss.shape)
-                    # exit(0)
-                    # buf_ce_loss = buf_ce_loss.mean()
+                    buf_ce_loss = criterion(buf_output,buf_labels)  # now you will calculate the loss by comparing the output to the class labels
+
+
+
                     ce_loss += args.buffer_weight_beta * buf_ce_loss  # now you will caculate the loss using the beta value to specify how much you care about correct class predictions on past exmaples
 
         else:  # no replay
@@ -539,7 +540,10 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                 cl_masked_output = outputs + mask_add_on  # now perform the masking of the outputs for the other classes
                 ce_loss = criterion(cl_masked_output, targets)  # calculate the loss
             else:
-                ce_loss = criterion(outputs, targets)
+                # ce_loss = criterion(outputs, targets)
+                # test with mse
+                ce_loss = loss_fn(criterion, outputs, targets)
+                # nn.MSELoss()(torch.argmax(outputs, dim=1).float(), targets)
         loss = ce_loss  # set the loss
         # your loss will be the loss per item in the batch
 
@@ -963,7 +967,9 @@ def sparCL(args, model, dataset, run_num=None, epoch_info=None):
 
     model.cuda()
 
-    criterion = nn.CrossEntropyLoss().cuda()
+    criterion = nn.MSELoss() if args.loss == "mse" else nn.CrossEntropyLoss()
+    criterion = criterion.cuda()
+    print(f"running with {args.loss} loss")
     criterion.__init__(reduce=False)
     early_stopping = utils.model_utils.EarlyStop(patience=args.patience, testing=False)
 

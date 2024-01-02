@@ -106,7 +106,7 @@ def baseline_fn(data, cl_type: str, model: str, log_file: str, epochs=64, batch_
         collect_all=True
     )
 
-    crit = nn.CrossEntropyLoss()
+    crit = nn.MSELoss()
     network = match_model(model)(len(classes))
     optimizer = torch.optim.Adam(network.parameters(), 0.03)
 
