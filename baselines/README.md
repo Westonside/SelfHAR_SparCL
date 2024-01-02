@@ -1,0 +1,2 @@
+# Important notes wehn running baselines
+- If the baseline file experiences a key error when making the nc benchmark it is important to note that some datasets are extremely imbalanced and that error means you should try to run again and hopefully you will get a better class balance in the tran and test sets 

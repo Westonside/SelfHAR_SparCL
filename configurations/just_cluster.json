@@ -11,18 +11,7 @@
             "epochs": 25,
             "batch_size": 64,
             "validation": false,
-            "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml"
-        },
-       {
-            "type": "baseline_hart",
-            "files": "../SensorBasedTransformerTorch/datasets/processed/SHL",
-            "model": "hart",
-            "input_shape": 6,
-            "epochs": 25,
-            "batch_size": 64,
-            "validation": false,
-            "sparsity_profile": "profiles/hart/irr/hart_0.75.yaml"
+            "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml",
         }
-
     ]
 }

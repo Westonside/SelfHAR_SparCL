@@ -32,4 +32,4 @@ prune_ratios:
   layer4.1.conv2.weight:
     0.75
 rho:
-  0.001
+0.001

@@ -2,6 +2,7 @@
 # All rights reserved.
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
+from datasets.SequentialSignal import SequentialSignalDataset
 from datasets.multimodal_features import SequentialMultiModalFeatures
 from datasets.seq_mnist import SequentialMNIST
 from datasets.seq_cifar10 import SequentialCIFAR10
@@ -26,5 +27,6 @@ def get_dataset(args: Namespace) -> ContinualDataset:
     :param args: the arguments which contains the hyperparameters
     :return: the continual dataset
     """
-    assert args.dataset in NAMES.keys()
+    if args.dataset in ["UCI", "SHL", "WISDM", "MotionSense"]:
+        return SequentialSignalDataset(args)
     return NAMES[args.dataset](args)

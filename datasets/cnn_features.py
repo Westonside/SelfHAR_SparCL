@@ -19,7 +19,7 @@ from datasets.utils.continual_dataset import get_previous_train_loader
 from typing import Tuple
 from torch.utils.data import Dataset, DataLoader
 
-class MySignalDataset(Dataset):
+class MyCNNDataset(Dataset):
     def __init__(self, data, classes_to_idx: list):
         self.data, self.targets = data
         self.classes_to_idx = classes_to_idx
@@ -36,34 +36,35 @@ class MySignalDataset(Dataset):
         return len(self.data)
 
 
-class SequentialSignalDataset(ContinualDataset):
+class SequentialCNNDataset(ContinualDataset):
     NAME = "signal_dataset"
     N_CLASSES_PER_TASK = 2
     TOTAL_CLASSES = 8
     SETTING = 'class-il'
     TRANSFORM = None
     N_TASKS = 4
-    def __init__(self, args: Namespace):
+    #TODO: need to add a better train and test split because at the moment the test dataset only has 4 classes
+    # SHL DOES NOT HAVE ALL 8 CLASSES IN THE TESTING
+    def __init__(self, args: Namespace, train,test):
         #load the file
-        data = dataset_loading.load_datasets(args.modal_file[args.modal_file.rfind("/")+1:], path=args.modal_file[:args.modal_file.rfind("/")])
         # print(data)
-        self.train_X, self.train_y = data.train, data.train_label
-        self.train_y = np.argmax(self.train_y, axis=1)
-        self.test_X, self.test_y = data.test, data.test_label
-        self.test_y = np.argmax(self.test_y,axis=1)
+        self.train_X, self.train_y = train
+        # self.train_y = np.argmax(self.train_y, axis=1)
+        self.test_X, self.test_y = test
+        # self.test_y = np.argmax(self.test_y,axis=1)
 
-        self.classes = data.classes
+        self.classes = []
 
-        if args.validation:
-            validation_labels = np.argmax(data.validation_label, axis=1)
-            self.validation = (data.validation, validation_labels)
+        # if args.validation:
+        #     validation_labels = np.argmax(data.validation_label, axis=1)
+        #     self.validation = (data.validation, validation_labels)
         super().__init__(args)
 
 
     def get_data_loaders(self, return_dataset=False) -> Tuple[DataLoader, DataLoader]:
-        train_dataset = MySignalDataset((self.train_X, self.train_y), classes_to_idx=self.classes)
+        train_dataset = MyCNNDataset((self.train_X, self.train_y), classes_to_idx=self.classes)
         # print(self.train_X.shape, self.train_y.shape)
-        test_dataset = MySignalDataset((self.test_X, self.test_y), classes_to_idx=self.classes)
+        test_dataset = MyCNNDataset((self.test_X, self.test_y), classes_to_idx=self.classes)
         # print(self.test_X.shape , self.test_y.shape)
         train, test = store_masked_loaders(train_dataset, test_dataset, self)
         if not return_dataset:
@@ -74,7 +75,7 @@ class SequentialSignalDataset(ContinualDataset):
     def not_aug_dataloader(self, batch_size: int) -> DataLoader:
         # i am not applying the transformation pipeline seen below:
         # transform = transforms.Compose([transforms.ToTensor(), self.get_normalization_transform()])
-        train_dataset = MySignalDataset(self.train_X,idx_to_class=self.classes, classes=self.classes)
+        train_dataset = MyCNNDataset(self.train_X,idx_to_class=self.classes, classes=self.classes)
         train_loader = get_previous_train_loader(train_dataset, batch_size)
         return train_loader
 

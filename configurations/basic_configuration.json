@@ -1,10 +1,38 @@
 {
-    "configurations": :[
-        {
-            "type": "cnn_feature_extraction",
-            "files": "../../",
-            "model": "Simple"
+    "runs_per_experiment": 1,
+    "baseline_configuration": "base_config.json",
+    "configurations": [
+       {
+        "type": "cnn_features",
+        "files": "./data/feature_cnn/shl",
+        "input_shape": 192,
+        "model": "simple",
+        "epochs": 25,
+        "batch_size": 64,
+        "validation": true,
+        "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml"
+      },
+       {
+            "type": "multi_modal_clustering_features",
+            "files": "../SensorBasedTransformerTorch/extracted_features/multi_modal_extracted_features_similarity.hkl",
+            "input_shape": 256,
+            "model": "simple",
+            "epochs": 25,
+            "batch_size": 64,
+            "validation": true,
+            "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml"
+        },
+         {
+            "type": "baseline_hart",
+            "files": "../SensorBasedTransformerTorch/datasets/processed/SHL",
+            "model": "hart",
+            "input_shape": 6,
+            "epochs": 25,
+            "batch_size": 64,
+            "validation": true,
+            "sparsity_profile": "profiles/hart/irr/hart_0.75.yaml"
         }
+
 
     ]
 }

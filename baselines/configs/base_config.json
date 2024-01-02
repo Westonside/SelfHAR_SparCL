@@ -1,13 +1,33 @@
 {
+
+  "baseline_files":{
+    "files": ["SHL"],
+    "data_dir": "../../SensorBasedTransformerTorch/datasets/processed/"
+  },
   "configs": [
     {
-      "cl_type": "ewc",
+      "cl_type": "bic",
       "model": "hart",
-      "log_file": "output_ewc_log.txt",
-      "files_dir": "../../SensorBasedTransformerTorch/datasets/processed/",
-      "files": ["SHL"],
-      "epochs": 60,
-      "batch_size":  64
+      "log_file": "output_bic_log_shl.txt",
+      "epochs": 25,
+      "batch_size": 64
+    },
+    {
+      "cl_type": "agem",
+      "sample_size": 1300,
+      "patterns_per_exp": 250,
+      "model": "hart",
+      "log_file": "output_agem_log_shl.txt",
+      "epochs": 25,
+      "batch_size": 64
+    },
+    {
+      "cl_type": "ewc",
+      "ewc_lambda": 0.001,
+      "model": "hart",
+      "log_file": "output_ewc_log_shl.txt",
+      "epochs": 25,
+      "batch_size": 64
     }
   ]
 }

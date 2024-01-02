@@ -1,8 +1,12 @@
-import json
-import os
 import argparse
-import shutil
-import sys
+import datetime
+import gc
+import hickle
+from preprocess.UserDataLoader import UserDataLoader
+from torchmetrics import ConfusionMatrix, F1Score
+
+from baselines import icarl_baseline
+from models.super_special_model import  HartClassificationModelSparCL
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,7 +20,6 @@ import utils.model_utils
 from datasets.hhar_features import SequentialHHAR
 import time
 
-from datasets.multi_modal_clustering_dataset import MultiModalClusteringDataset
 from models.in_out_model import InOut
 # from models.resnet32_cifar10_grasp import resnet32
 # from models.vgg_grasp import vgg19, vgg16
@@ -36,6 +39,7 @@ from prune_utils import *
 from datasets import get_dataset, SequentialMultiModalFeatures
 from utils import dynamic_architecture_util
 from utils.buffer import Buffer
+from utils.configuration_util import load_config, load_data_model
 from utils.stats import calculate_f1_scores
 
 # Training settings
@@ -166,6 +170,7 @@ test_har = True
 herding = False
 dynamic = False
 early_stop = True
+
 args = argparse.Namespace(
     arch='simple' if test_har else 'resnet',
     arch_type = 'dynamic' if dynamic else 'static',
@@ -182,7 +187,7 @@ args = argparse.Namespace(
     batch_size=128,
     test_batch_size=256,
     epochs=500,
-    optmzr='sgd',
+    optmzr='adam',
     lr=0.03,
     lr_decay=60,
     momentum=0.9,
@@ -205,14 +210,15 @@ args = argparse.Namespace(
     save_model='checkpoints/resnet18/paper/gradient_effi/mutate_irr/seq-cifar10/buffer_500/',
     sparsity_type='random-pattern',
     config_file='config_vgg16',
-    use_cl_mask=False,
-    buffer_size=800,
-    buffer_weight=0.1,
-    buffer_weight_beta=0.5,
+    # use_cl_mask=True,
+    use_cl_mask=True,
+    buffer_size=800, #1300 made imbalanced
+    buffer_weight=0.1, #TODO: original value was 0.1 # .15 and .5 got .27 and .1
+    buffer_weight_beta=0.5, #TODO: original was 0.5
     # dataset='seq-cifar10',
     dataset='multi_modal_features',
     # dataset='hhar_features' if test_har else 'seq-cifar10',
-    validation=True,
+    validation=False,
     test_epoch_interval=1,
     evaluate_mode=False,
     eval_checkpoint=None,
@@ -470,6 +476,7 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                 outputs = model(
                     inputs)  # predict on  the passed in inputs will have probability distribution for prediction
                 # add CL per task mask
+
                 if cl_mask is not None:  # if you have a cl mask then mask the other classes not used in this prediction
                     mask_add_on = torch.zeros_like(outputs)  # make a tensor of 0s of len outputs
                     mask_add_on[:, cl_mask] = float(
@@ -498,16 +505,6 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                         args.batch_size,
                         transform=dataset.get_transform())  # you will try to get get your logits as close as possible to the logits in the buffer (regularizes) want to predict similarly to past predictions to preserve prediction
                     # you will need to transform the logits if you have a dynamic architecture
-
-                    # if dynamic:
-                    #     buf_logits = buf_logits.cpu()
-                    #     imbalanced_logits = len(buf_logits[0]) != model.layer2.out_features
-                    #
-                    #     # Convert the list of tensors on the CPU
-                    #     buf_logits = dynamic_architecture_util.extend_array(buf_logits, model.layer2.out_features).cuda()
-
-
-                        # Move buf_logits back to the GPU
 
                     buf_output = model(buf_inputs)  # predict on the past inputs in the buffer
                     # print(buf_inputs.shape)
@@ -621,15 +618,6 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         elif args.replay_method == 'der':
             buffer.add_data(examples=not_transformed_inputs, logits=outputs.data)
         elif (args.replay_method == 'derpp'):
-            # print('running derpp')
-              # and args.buffer_mode != 'herding'):
-            # if dynamic and  t > 0 and imbalanced_logits: # if the first epoch and not the first task
-            #     #here you will have to clear the buffer and add in the larger logits values
-            #     _in, _lab, logits = buffer.get_all_data()
-            #     buffer.empty()
-            #     logits  = logits.cpu()
-            #     extended_buff = dynamic_architecture_util.extend_array(logits, model.layer2.out_features).cuda() # now that you have extended the
-            #     buffer.add_data(examples=_in, labels=_lab, logits=extended_buff)
             buffer.add_data(examples=not_transformed_inputs, labels=targets, logits=outputs.data)
 
         if batch_idx % 10 == 0:  # if the batch index is divisble by 10
@@ -652,7 +640,8 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                 data_time=data_time
             ))
     # at the end of epoch you will perform your validation
-
+    print('epoch_end')
+    return (correct/len(trainset.targets)) * 100
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -715,10 +704,12 @@ def validation(model, dataset, epoch, task, task_dict):
     if task not in task_dict:
         task_dict[task] = {}
     task_dict[task][epoch] = {"individual": []}  # in the dict at the task value is a value for the epoch
+    batch_size = 32
     with torch.no_grad():
         total_correct = 0
         total_loss = 0
         for t in range(task + 1):  # go up to that task
+
             cur_classes = np.arange(t * dataset.N_CLASSES_PER_TASK, (t + 1) * dataset.N_CLASSES_PER_TASK)
             # task_valid_loss = 0
             correct = 0
@@ -727,27 +718,34 @@ def validation(model, dataset, epoch, task, task_dict):
                 np.isin(dataset.validation[1], cur_classes))  # get the indicies where they are in the task
             data, label = torch.tensor(dataset.validation[0][task_class_vals]).cuda(), torch.tensor(
                 dataset.validation[1][task_class_vals]).cuda()
-            output = model(data)
-            criterion = nn.CrossEntropyLoss()
 
-            task_valid_loss = criterion(output, label).item()
-            total_loss += task_valid_loss
 
-            pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
+            for i in range(0,len(data), batch_size):
+                batch_data = data[i:i+batch_size].cuda()
+                batch_labels = label[i:i+batch_size].cuda()
+                output = model(batch_data)
+                criterion = nn.CrossEntropyLoss()
 
-            correct += pred.eq(label.data.view_as(pred)).cpu().sum().item()
-            total_correct += correct  # add the total correct to the total
+                task_valid_loss = criterion(output, batch_labels).item()
 
-            task_acc = (float(correct) / len(data)) * 100.
-            assert (task_acc < 100.)
+                total_loss += task_valid_loss
+
+                pred = torch.argmax(output.detach().cpu(), dim=1)
+
+                correct += torch.count_nonzero(pred == batch_labels.detach().cpu()).item()
+                total_correct += correct  # add the total correct to the total
+
+                task_acc = (float(correct) / len(data)) * 100.
+                assert (task_acc < 100.)
             cur_task_epoch_task = {
-                "task": t,
-                "task_validation_loss": task_valid_loss,
-                "task_accuracy": task_acc,
-                "correct": correct,
+                    "task": t,
+                    "task_validation_loss": task_valid_loss,
+                    "task_accuracy": task_acc,
+                    "correct": correct,
             }
 
             task_dict[task][epoch]["individual"].append(cur_task_epoch_task)
+            print(str(cur_task_epoch_task))
 
         total_acc = float(total_correct) / float(len(dataset.validation[1])) * 100.
         task_dict[task][epoch]["overall"] = {
@@ -761,56 +759,39 @@ def validation(model, dataset, epoch, task, task_dict):
     return total_loss
 
 
-def test(model, dataset):
+def test(model, dataset, batch_size=32):
     model.eval()
     acc_list = np.zeros((dataset.N_TASKS,))
     til_acc_list = np.zeros((dataset.N_TASKS,))
-    confusion = np.zeros((dataset.N_CLASSES_PER_TASK, dataset.N_CLASSES_PER_TASK), dtype=np.uint64)
+
+    metric = ConfusionMatrix(num_classes=dataset.TOTAL_CLASSES, task="multiclass")
+    f1_micro = F1Score(num_classes=dataset.TOTAL_CLASSES, task="multiclass", average="micro")
+    f1_macro = F1Score(num_classes=dataset.TOTAL_CLASSES, task="multiclass", average="macro")
+    total_loss = 0
+    preds = []
     with torch.no_grad():
-        for task, test_loader in enumerate(dataset.test_loaders):
-            predictions = {
-                'predictions': [],
-                'labels': [],
-            }
-            test_loss = 0
-            correct = 0
-            til_correct = 0
-            for data in test_loader:
-                if is_two_dim:
-                    img, target, _ = data
-                else:
-                    img, target = data
-                # print(f"\tTest classes"+str(np.unique(target)))
-                if args.cuda:
-                    img, target = img.cuda(), target.cuda()
-                img, target = Variable(img, volatile=True), Variable(target)
-                output = model(img)
-                criterion = nn.CrossEntropyLoss()
-                test_loss = criterion(output, target)
-                # test_loss += F.cross_entropy(output, target, size_average=False).data[0] # sum up batch loss
-                pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
-                predictions['predictions'].extend(pred.tolist())
-                predictions['labels'].extend(target.tolist())
+        for i in range(0,len(dataset.test_y), batch_size):
+            labels = torch.from_numpy(dataset.test_y[i:i+batch_size]).cuda()
+            data = torch.from_numpy(dataset.test_X[i:i+batch_size]).cuda()
+            criterion = nn.CrossEntropyLoss()
+            output = model(data)
+            loss = criterion(output,labels)
+            total_loss += loss
+            pred = torch.argmax(output.detach().cpu(), dim=1)
+            preds.append(pred)
 
+        preds = (torch.hstack(preds))
+        labels = torch.from_numpy(dataset.test_y)
+        confusion = metric((preds),(labels))
+        print("*" * 50, "Displaying Confusion Matrix", "*"*50) #TODO the SHL dataset does not have all 8 classes in the testing set
+        print(confusion)
+        f1_micro_calc = f1_micro(preds, labels)
+        f1_macro_calc = f1_macro(preds, labels)
+        print("*" * 50, "Displaying F1 Macro and Micro Scores Matrix", "*"*50) #TODO the SHL dataset does not have all 8 classes in the testing set
+        print(f1_macro_calc, f1_micro_calc)
+        return f1_micro_calc.item(), f1_macro_calc.item(), confusion
 
-                # pred for task incremental
-                mask_classes(output, dataset, task)
-                til_pred = output.data.max(1, keepdim=True)[1]
-                correct += pred.eq(target.data.view_as(pred)).cpu().sum()
-                til_correct += til_pred.eq(target.data.view_as(til_pred)).cpu().sum()
-
-            test_loss /= len(test_loader.dataset)
-            acc = float(100. * correct) / float(len(test_loader.dataset))
-            til_acc = float(100. * til_correct) / float(len(test_loader.dataset))
-            acc_list[task] = acc
-            til_acc_list[task] = til_acc
-            print(
-                    f"Task {task}, Average loss {test_loss:.4f}, Class inc Accuracy {acc:.3f}, Task inc Accuracy {til_acc:.3f}")
-    micro_f1, macro_f1 = calculate_f1_scores(confusion)
-    print('Micro F1 Score: ', micro_f1)
-    print('Macro F1 Score: ', macro_f1)
-
-    return acc_list, til_acc_list, micro_f1, macro_f1
+    return acc_list, til_acc_list
 
 
 def evaluate(model, dataset, last=False, test=False):
@@ -978,39 +959,9 @@ def get_hms(seconds):
     return h, m, s
 
 
-def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None):
-    print('starting with ', data_location)
-    args.dataset=dataset_name
-    if args.cuda:
-        if args.arch == "vgg":
-            if args.depth == 19:
-                model = vgg19(dataset=args.dataset)
-            elif args.depth == 16:
-                model = vgg16(dataset=args.dataset)
-            else:
-                sys.exit("vgg doesn't have those depth!")
-        elif args.arch == "resnet":
-            if args.depth == 18:
-                model = resnet18(dataset=args.dataset)
-            elif args.depth == 20:
-                model = resnet20(dataset=args.dataset)
-            elif args.depth == 32:
-                model = resnet32(depth=32, dataset=args.dataset)
-            else:
-                sys.exit("resnet doesn't implement those depth!")
-        elif args.arch == "simple":
-            # if dynamic:
-            #     model = InOut(96, 2) # start with 2 classes
-            if dataset_name == 'multi_modal_features':
-                model = InOut(2048,8)
-            else:
-                model = InOut(96,6)
-        else:
-            sys.exit("wrong arch!")
+def sparCL(args, model, dataset, run_num=None, epoch_info=None):
 
-        if args.multi_gpu:
-            model = torch.nn.DataParallel(model)
-        model.cuda()
+    model.cuda()
 
     criterion = nn.CrossEntropyLoss().cuda()
     criterion.__init__(reduce=False)
@@ -1041,9 +992,6 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
     if not model_state is None:
         model.load_state_dict(model_state)
 
-    if data_location is not None:
-        args.modal_file = data_location
-
     log_filename = args.log_filename
     print(log_filename)
 
@@ -1069,9 +1017,10 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
     _, total_sparsity = test_sparsity(model, column=False, channel=False, filter=False, kernel=False)
 
     # CL buffer and dataset setup
-    dataset = get_dataset(args)
+    # dataset = get_dataset(args)
     global is_two_dim, total_epochs
-    is_two_dim = args.dataset in [SequentialHHAR.NAME, SequentialMultiModalFeatures.NAME]
+    is_two_dim = True
+            # args.dataset in [SequentialHHAR.NAME, SequentialMultiModalFeatures.NAME, "MotionSense", "SHL", "UCI", "WISD"])
     print('*' * 100)
     print('dataset', args)
 
@@ -1091,8 +1040,11 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
     # example_stats_train = {}  # change name because fogetting function also have example_stats
     task_valid_info = {}
 
-
+    task_training_accuracy = {}
+    forgetting_task_epoch = {}
     for t in range(dataset.N_TASKS):  # for each copntinaul learning task set out
+        task_training_accuracy[t] = []
+        forgetting_task_epoch[t] = []
         example_stats_train = {}
 
         optimizer_init_lr = args.warmup_lr if args.warmup else args.lr  # the learning rate to be used
@@ -1111,19 +1063,7 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
 
         _, _, train_dataset, test_dat = dataset.get_data_loaders(return_dataset=True)  # get the training dataset
         full_dataset = copy.deepcopy(train_dataset)  # create a copy of the training dataset
-        if args.buffer_mode == 'herding':
-            # this is where you will check if the buffer is empty or not
-            if buffer is not None and not buffer.is_empty():  # if the buffer is not empty
-                # then you will combine the buffer inputs and labels with the training set
-                print('buffer is not empty')
-                buff_val = buffer.get_all_data()
-                full_dataset.data = np.concatenate((full_dataset.data.cpu(), buff_val[0]), axis=0)
-                full_dataset.targets  = np.concatenate((full_dataset.targets.cpu(), buff_val[1]), axis=0)
-                full_dataset.classes = np.unique(np.concatenate((full_dataset.classes, np.unique(buff_val[1], axis=1))))
 
-                # full_dataset.classes = full_dataset.classes.cuda()
-                # full_dataset.targets = full_dataset.targets.cuda()
-                # full_dataset.data = full_dataset.data.cuda()
         if args.sorting_file == None:
             train_indx = np.array(range(len(full_dataset.targets)))  # create an array from [0-> len(training_set)]
         else:
@@ -1172,7 +1112,7 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
             cl_mask = None
 
         # STARTING TRAINING for the task
-        total_epochs = int(args.epochs / dataset.N_TASKS)
+        total_epochs = args.epoch
         if epoch_info is not None and epoch_info.get(t) is not None: # if custom epochs have been set
             total_epochs = epoch_info[t]
 
@@ -1181,7 +1121,6 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
             prune_update(
                 epoch)  # prune and grow with mask updates this calls update mask in the retrain  does growing and pruning every 5 epoch
             optimizer.zero_grad()  # set the optimizer to be 0 (need to do this for training)
-
             #########remove data at 25 epoch, update dataset ######
             if epoch > 0 and epoch % args.sp_mask_update_freq == 0 and epoch <= args.remove_data_epoch:
                 if args.sorting_file == None:
@@ -1261,10 +1200,13 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
 
             print('Training on ' + str(len(train_dataset.targets)) + ' examples')
 
-            train(model, train_dataset, criterion, scheduler, optimizer, epoch, t, buffer, dataset,
+            train_acc = train(model, train_dataset, criterion, scheduler, optimizer, epoch, t, buffer, dataset,
                   # train the model, divide into batches and then perform
                   example_stats_train, train_indx, maskretrain=False, masks={}, cl_mask=cl_mask,
                   task_dict=task_valid_info)
+
+            task_training_accuracy[t].append(train_acc)
+
             if args.validation:
                 print("=" * 120, 'validation')
                 total_loss = validation(model, dataset, epoch, t, task_valid_info)
@@ -1281,6 +1223,8 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
                         til_prec1 = sum(til_acc_list) / (t + 1)
                         acc_matrix[t] = acc_list
                         forgetting = np.mean((np.max(acc_matrix, axis=0) - acc_list)[:t]) if t > 0 else 0.0
+                        forgetting_task_epoch[t].append(forgetting)
+
                         learning_acc = np.mean(np.diag(acc_matrix)[:t + 1])
 
                         lr = optimizer.param_groups[0]['lr']
@@ -1313,14 +1257,16 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
                 print(t, 'running the eval stage')
                 acc_list, til_acc_list = evaluate(model, dataset, test=t==dataset.N_TASKS-1 and epoch == (total_epochs-1)) # run if the last task
 
-                if nums_run == 0:
-                    if epoch_info is None:
-                        epoch_info = {}
-                    epoch_info[t] = epoch
+                # if nums_run == 0:
+                #     if epoch_info is None:
+                #         epoch_info = {}
+                # epoch_info[t] = epoch
                 prec1 = sum(acc_list) / (t + 1)
                 til_prec1 = sum(til_acc_list) / (t + 1)
                 acc_matrix[t] = acc_list
+                #TODO refactor this and the validation
                 forgetting = np.mean((np.max(acc_matrix, axis=0) - acc_list)[:t]) if t > 0 else 0.0
+                forgetting_task_epoch[t].append(forgetting)
                 learning_acc = np.mean(np.diag(acc_matrix)[:t + 1])
 
                 lr = optimizer.param_groups[0]['lr']
@@ -1358,26 +1304,21 @@ def sparCL(args, dataset_name, data_location=None, run_num=None, epoch_info=None
                                                                                                        total_sparsity,
                                                                                                        t)
         torch.save(model.state_dict(), filename)
-        # at the end of the training of the task fill the buffer with examples
-        # if args.buffer_mode == 'herding':
-        #     print('herding')
-        #     buffer.fill_buffer(model, dataset,t)
 
-        # at the end of the task you will extend the model
-        # if dynamic:
-        #     print('running dynamic')
-        #     model.extend_fc_layer(dataset.N_CLASSES_PER_TASK) # it will add n classes to the prediction
-        # buffer_class_percentage(buffer,t  )
+    f1_micro, f1_macro, confusion = test(model, dataset)
+    all_results = {
+        "f1_micro": f1_micro,
+        "f1_macro": f1_macro,
+        "task_training": task_training_accuracy,
+        "task_validation": task_valid_info,
+        "forgetting": forgetting_task_epoch,
+        "confusion": confusion
+    }
 
-
-    _,_,f1_micro, f1_macro = test(model, dataset)
-    with open('results_file.txt', 'a')as f:
-        val = f"{args.modal_file}: {f1_micro, f1_macro}"
-        f.write(val)
     # dump the validation data
 
     run_file = 'HHAR/hhar_features.pkl' if args.modal_file is None else 'gyro'
-    return task_valid_info, epoch_info
+    return task_valid_info, epoch_info, all_results
     # with open(f"{run_file}_validation_{args.arch}_validation.pkl", 'wb') as f:
     #     pickle.dump(task_valid_info, f)
 
@@ -1408,46 +1349,27 @@ def process_validations(valids, modal_type):
 
 
 if __name__ == '__main__':
-    nums_run = 1
-
-    # run_files = {
-    #     'gyro': 'HHAR/20231103-182025_hhar_features_gyro.pkl',
-    #     'accel': 'HHAR/20231104-162132_hhar_features_accel.pkl'
-    # }
-    cnn_features = False
-    # run_files = {
-    #     'both': '../SensorBasedTransformerTorch/extracted_features/multi_modal_extracted_features.hkl'
-    # }
-
-
-
-    # run_files = {
-    #     'accel': '../selfhar_testing/',
-    #     'gyro': '../selfhar_testing/20231204-023349_SHL_features_gyro.hkl'
-    #
-    # }
-    cnn_dir = '../selfhar_testing/features_dir/'
-    clustering_dir = '../SensorBasedTransformerTorch/extracted_features/'
-    # get the cnn features
-    use_cnn = True
-    use_clustering = True
-    cnn = {f"cnn_accel{i}" if "accel" in x else f"cnn_gyro{i}": os.path.join(cnn_dir,x) for i, x in enumerate(os.listdir(cnn_dir))} if use_cnn else {}
-    clustering = {f"clustering{i}": os.path.join(clustering_dir,x) for i,x in enumerate(os.listdir(clustering_dir))} if use_clustering else {}
-
-
-    run_files = {**cnn, **clustering}
-
-    for dataset in run_files.keys():
-        validations = []
-        dataset_name = 'multi_modal_features' if "clustering" in dataset else 'hhar_features'
-        # epochs = 500
-        epoch_information = None
-        for i in range(nums_run): # this will run n times to be averaged
-            valid_info, epoch_info = sparCL(args, dataset_name, run_files[dataset],run_num=i, epoch_info=epoch_information)
-            if i == 0:
-                epoch_information = epoch_info
-            validations.append(valid_info)
+    plots_dir = "./plots"
+    config = load_config("./configurations/basic_configuration.json")
+    run_runs = config["runs_per_experiment"]
+    current_date_time = datetime.datetime.day
+    print(current_date_time)
+    sensor_dataset = None
+    baseline_config = config["baseline_configuration"]
+    for configuration in config["configurations"]:
+        print(configuration)
+        for run in range(run_runs):
+            model,dataset = load_data_model(configuration, args)
+            if configuration["type"]  == "baseline_hart":
+                sensor_dataset =  dataset
+            _,_, all_scores = sparCL(args,model, dataset, run)
+            file = "PAMAP" if "PAMAP" in configuration['files']  else "SHL"
+            hickle.dump(all_scores, f"{configuration['type']}_{file}.hkl")
             torch.cuda.empty_cache()  # clear the cache after each run
-        process_validations(validations, dataset)
-
-    print('done')
+            gc.collect()
+    # now run the baselines
+    if sensor_dataset is not None:
+        user_set = UserDataLoader((sensor_dataset.train_X, sensor_dataset.train_y), (sensor_dataset.test_X, sensor_dataset.test_y), sensor_dataset.classes)
+        icarl_baseline.run_baseline(user_set, baseline_config)
+    else:
+        icarl_baseline.run_baseline(None, baseline_config)

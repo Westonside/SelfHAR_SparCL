@@ -163,14 +163,20 @@ class SparseTraining(object):
     will create a new mask of the values that are above threshold, meaning that they are important to the current task and save it in the mask dictionary
     """
     def apply_masks_on_grads_mix(self):
+        skip = []
         with torch.no_grad(): # set no gradient claculation
             for name, W in (self.model.named_parameters()): # go through the weights and biases for layers and zero out gradietns for masked weights
+                if 'norm' in name and name in self.masks:
+                    self.masks.pop(name)
                 if name in self.masks: # if in masked
                     dtype = W.dtype # get the data type of the weight
+                    if(W.grad is None):
+                        skip.append(name)
+                        continue
                     (W.grad).mul_((self.masks[name] != 0).type(dtype)) # mask out the gradient if not 1 in the mask
             
             for name, W in (self.model.named_parameters()): # for each weight, get the sparsity ratio get the weights and see if the weight meets
-                if name not in self.masks:  # if not in mask
+                if name not in self.masks or name in skip and 'norm' not in name:  # if not in mask
                     continue
                 # cuda_pruned_weights = None
                 percent = self.args.gradient_sparse * 100  # the gradient sparsity ratio
@@ -184,6 +190,8 @@ class SparseTraining(object):
                 above_threshold = above_threshold.astype(
                     np.float32
                 )  # has to convert bool to float32 for numpy-tensor conversion
+                # print(name)
+                under_threshold = torch.from_numpy(under_threshold)
                 W.grad[under_threshold] = 0 # this will zero out the gradients that are under the threshold for gradient sparsity THIS IS WHERE YOU REMOVE SMALLER GRADIENTS
 
                 # gradient = W.grad.data
@@ -206,25 +214,29 @@ class SparseTraining(object):
         layer_cont = 1
         mask = self.gradient_masks
         for name, weight in mask.items(): #go through all the weigts and names in the mask
-            if (len(weight.size()) == 4):# and "shortcut" not in name): # if the weight has a size of 4 meaning 4d tensor, ppossibly a conv layer?
-                zeros = np.sum(weight.cpu().detach().numpy() == 0) #get the number of values in the weight that are 0
-                total_zeros += zeros # add to the total zeros
-                non_zeros = np.sum(weight.cpu().detach().numpy() != 0) #get thee number of 0s in the weight
-                total_nonzeros += non_zeros # add the number of non zeros to the running total
-                print("(empty/total) masks of {}({}) is: ({}/{}). irregular sparsity is: {:.4f}".format(
-                    name, layer_cont, zeros, zeros+non_zeros, zeros / (zeros+non_zeros)))
+            zeros = np.sum(weight.cpu().detach().numpy() == 0) #get the number of values in the weight that are 0
+            total_zeros += zeros # add to the total zeros
+            non_zeros = np.sum(weight.cpu().detach().numpy() != 0) #get thee number of 0s in the weight
+            total_nonzeros += non_zeros # add the number of non zeros to the running total
+            print("(empty/total) masks of {}({}) is: ({}/{}). irregular sparsity is: {:.4f}".format(
+                name, layer_cont, zeros, zeros+non_zeros, zeros / (zeros+non_zeros)))
 
             layer_cont += 1
+        if total_nonzeros == 0:
+            comp_ratio = 0.
+            total_sparsity = 0
+            print("---------------------------------------------------------------------------")
+            print("layer does not have values!! skipping")
+        else:
+            comp_ratio = float((total_zeros + total_nonzeros)) / float(total_nonzeros) if layer_cont > 5 else 0.#get the ratio of non zero to 0
+            total_sparsity = total_zeros / (total_zeros + total_nonzeros) if layer_cont > 5 else 0.# get the sparsity ratio
 
-        comp_ratio = float((total_zeros + total_nonzeros)) / float(total_nonzeros) if layer_cont > 5 else 0.#get the ratio of non zero to 0
-        total_sparsity = total_zeros / (total_zeros + total_nonzeros) if layer_cont > 5 else 0.# get the sparsity ratio
-
-        print("---------------------------------------------------------------------------")
-        print("total number of zeros: {}, non-zeros: {}, zero sparsity is: {:.4f}".format(
-            total_zeros, total_nonzeros, total_zeros / (total_zeros + total_nonzeros))if layer_cont > 5 else 0.)
-        print("only consider conv layers, compression rate is: {:.4f}".format(
-            (total_zeros + total_nonzeros) / total_nonzeros)) if layer_cont > 5 else 0.
-        print("===========================================================================\n\n")
+            print("---------------------------------------------------------------------------")
+            print("total number of zeros: {}, non-zeros: {}, zero sparsity is: {:.4f}".format(
+                total_zeros, total_nonzeros, total_zeros / (total_zeros + total_nonzeros))if layer_cont > 5 else 0.)
+            print("only consider conv layers, compression rate is: {:.4f}".format(
+                (total_zeros + total_nonzeros) / total_nonzeros)) if layer_cont > 5 else 0.
+            print("===========================================================================\n\n")
 
         return comp_ratio, total_sparsity #return the two ratios
         

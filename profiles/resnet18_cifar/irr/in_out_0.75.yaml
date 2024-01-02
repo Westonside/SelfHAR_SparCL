@@ -1,5 +1,0 @@
-prune_ratios:
-  layer1.weight:
-    0.75
-rho:
-  0.001

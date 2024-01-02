@@ -7,20 +7,21 @@ from torch.nn.init import kaiming_normal_
 
 
 class InOut(nn.Module):
-    def __init__(self, in_planes: int, classes: int):
+    def __init__(self, in_planes: int, classes: int, relu=False,dropout_rate=0.2, features=256):
         super(InOut, self).__init__()
         # self.flatten = nn.Flatten()
-        self.layer1 = nn.Linear(in_planes, 512) # pass to hidden layer of 512
-        self.dropout = nn.Dropout(p=0.3)
-        self.relu = nn.ReLU()
+        self.layer1 = nn.Linear(in_planes, features) # pass to hidden layer of 512
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.relu = nn.ReLU() if relu else None
 
-        self.layer2 = nn.Linear(512, classes)
+        self.layer2 = nn.Linear(features, classes)
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         # x = self.flatten(x)
         x = self.layer1(x)
-        x = self.relu(x)
+        if self.relu is not None:
+            x = self.relu(x)
         x = self.dropout(x)
         x = self.layer2(x)
         return x
