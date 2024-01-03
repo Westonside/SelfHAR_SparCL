@@ -123071,3 +123071,13 @@ warmup_epochs:0
 warmup_lr:0.0001
 weight_decay:0.0001
 workers:4
+Training on 154688 examples
+Task: 0, Epoch:24, Average Acc:[48.480], , Task Inc Acc:[48.480], Learning Acc:[48.480], Forgetting:[0.000], LR:0.03
+	Acc@T0: 48.480	
+	Til-Acc@T0: 48.480	
+
+Training on 42445 examples
+Task: 1, Epoch:24, Average Acc:[39.929], , Task Inc Acc:[64.169], Learning Acc:[64.169], Forgetting:[48.480], LR:0.03
+	Acc@T0: 0.000	Acc@T1: 79.858	
+	Til-Acc@T0: 48.480	Til-Acc@T1: 79.858	
+

@@ -42,7 +42,7 @@ from utils.buffer import Buffer
 from utils.combine import loss_fn
 from utils.configuration_util import load_config, load_data_model
 from utils.stats import calculate_f1_scores
-
+# IMPORTANT THE BASE IMPLEMENTATION COMES FROM https://github.com/neu-spiral/SparCL
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch CIFAR training')
 parser.add_argument('--arch', type=str, default=None,
@@ -215,8 +215,8 @@ args = argparse.Namespace(
     # use_cl_mask=True,
     use_cl_mask=True,
     buffer_size=800, #1300 made imbalanced
-    buffer_weight=0.05, #TODO: original value was 0.1 # .15 and .5 got .27 and .1
-    buffer_weight_beta=0.03, #TODO: original was 0.5
+    buffer_weight=0.05, # how mucnh care about predicting like the past part of dark experience
+    buffer_weight_beta=0.03, # how much care about getting past labels correct
     # dataset='seq-cifar10',
     dataset='multi_modal_features',
     # dataset='hhar_features' if test_har else 'seq-cifar10',
@@ -422,13 +422,6 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
         if args.mixup:
             inputs, target_a, target_b, lam = mixup_data(inputs, targets, args.alpha)
 
-        # Forward propagation, compute loss, get predictions
-        # add buffer here
-        # not giving the 96 features to the resnset
-        # print(model)
-        # for name, param in model.named_parameters():
-        #     print(param.requires_grad, name)
-        # exit(1)
         if (not buffer is None) and (
         not buffer.is_empty()) and t > 0:  # if the buffer is not empty or not the first task
             if args.replay_method == "er":  # if you have "er" replay not sure what that is (we use derpp)
@@ -701,7 +694,7 @@ def mask_classes(outputs, dataset, k):
     Impl Notes: In order to monitor forgetting I am conducting my validation on all tasks 
 '''
 
-
+# measure validation performance
 def validation(model, dataset, epoch, task, task_dict):
     model.eval()  # turn on evaluate model
 
