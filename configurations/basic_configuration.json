@@ -9,17 +9,17 @@
         "model": "simple",
         "epochs": 25,
         "batch_size": 64,
-        "validation": true,
+        "validation": false,
         "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml"
       },
        {
             "type": "multi_modal_clustering_features",
-            "files": "../SensorBasedTransformerTorch/extracted_features/multi_modal_extracted_features_similarity.hkl",
+            "files": "../SensorBasedTransformerTorch/extracted_features/multimodal_features_SHL.hkl",
             "input_shape": 256,
             "model": "simple",
             "epochs": 25,
             "batch_size": 64,
-            "validation": true,
+            "validation": false,
             "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml"
         },
          {
@@ -29,7 +29,7 @@
             "input_shape": 6,
             "epochs": 25,
             "batch_size": 64,
-            "validation": true,
+            "validation": false,
             "sparsity_profile": "profiles/hart/irr/hart_0.75.yaml"
         }
 

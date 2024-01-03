@@ -8,10 +8,12 @@
             "files": "../SensorBasedTransformerTorch/extracted_features/multimodal_features_SHL.hkl",
             "input_shape": 256,
             "model": "simple",
-            "epochs": 25,
+            "epochs": 15,
+            "loss": "ce",
+           "balance_training": true,
             "batch_size": 64,
             "validation": false,
-            "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml",
+            "sparsity_profile": "profiles/in_out/irr/in_out_0.75.yaml"
         }
     ]
 }

@@ -6,6 +6,7 @@ from preprocess.dataset_loading import load_datasets
 
 from datasets import SequentialMultiModalFeatures, SequentialSignalDataset
 from datasets.cnn_features import SequentialCNNDataset
+from datasets.multimodal_features import create_multimodal_data
 from models.in_out_model import InOut
 from models.super_special_model import HartClassificationModelSparCL
 
@@ -93,7 +94,8 @@ def load_dataset(file, model_type, args):
             print('testing') # here is where you have to load the data and then combine the data
 
         elif model_type == "multi_modal_clustering_features":
-            data = SequentialMultiModalFeatures(args)
+            load = create_multimodal_data(args)
+            data = SequentialMultiModalFeatures(args,*load)
             print('testing') # here you just load the data and will pass it to the dataset
         else:
             raise Exception("Invalid feature type provided! Options include cnn_features or multi_modal_clustering_features")

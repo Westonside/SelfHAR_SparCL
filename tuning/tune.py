@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 
+from datasets.multimodal_features import create_multimodal_data, SequentialMultiModalFeatures
 from main_sparse_train_w_data_gradient_efficient import sparCL
 from utils.configuration_util import load_data_model
 
@@ -122,10 +123,10 @@ sweep_config['metric'] = metric
 
 parameters_dict = {
     'buffer_weight':{
-        'values': [0.1,0.2,0.3]
+        'values': [0.005,0.01,0.03,0.05,0.1]
     },
     'buffer_weight_beta':{
-        'values': [0.3,0.4,0.5,0.6]
+        'values': [0.05,0.08,0.1,0.2, 0.03]
     }
     # 'features': {
     #     'values': [64, 128, 256, 512, 1024, 2048]
@@ -181,29 +182,28 @@ sweep_id = wandb.sweep(sweep_config, project="sweeping_downstream_spar")
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+configuration = {'type': 'multi_modal_clustering_features', 'files': '../SensorBasedTransformerTorch/extracted_features/multimodal_features_SHL.hkl', 'input_shape': 256, 'model': 'simple', 'epochs': 3, 'batch_size': 64, 'validation': False, 'sparsity_profile': 'profiles/in_out/irr/in_out_0.75.yaml'}
+args.modal_file = '../SensorBasedTransformerTorch/extracted_features/multimodal_features_SHL.hkl'
+data = create_multimodal_data(args)
+
 def train(config=None):
     with wandb.init(config=config):
         config = wandb.config
         lr = 0.03
 
         # data = load_datasets(['MotionSense', 'UCI', 'WISDM'], path='../datasets/processed/')
-        configuration = {'type': 'multi_modal_clustering_features', 'files': '../SensorBasedTransformerTorch/extracted_features/multimodal_features_SHL.hkl', 'input_shape': 256, 'model': 'simple', 'epochs': 3, 'batch_size': 64, 'validation': True, 'sparsity_profile': 'profiles/in_out/irr/in_out_0.75.yaml'}
         features  = 128
         dropout = 0.2
+        model, dataset = load_data_model(configuration, args)
+        dataset = SequentialMultiModalFeatures(args,*data)
         buffer_weight = config.buffer_weight
         buffer_weight_beta = config.buffer_weight_beta
-        model, dataset = load_data_model(configuration, args)
         args.use_cl_mask = False
         args.lr = lr
         args.buffer_weight = buffer_weight
         args.buffer_weight_beta = config.buffer_weight_beta
         optimizer = optim.Adam(model.parameters(), lr)
 
-        if lr == 0.1:
-            lam = lambda epoch: lr * (0.5 ** (epoch // 15))
-            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=[lam])
-        else:
-            scheduler = None
 
         model.to(device)
         _, _, all_scores = sparCL(args, model, dataset, 0)

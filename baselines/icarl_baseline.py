@@ -27,9 +27,10 @@ from models.super_special_model import HartClassificationModelSparCL
 
 global_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
+"""
+    This is the code used to run all baselines  
+"""
 def create_confuse(predictions, labels, cl_type):
-    place_holder = ['Standing','Walking','Runing','Biking','Car','Bus','Train','Subway'],
     labels = labels.numpy()
 
     cm = confusion_matrix(labels, predictions)
@@ -58,7 +59,7 @@ def get_plugin(scenario):
 
 
 plugin_matcher = {
-    "ewc": EWCPlugin,  # TODO: Grid search ewc lambda value
+    "ewc": EWCPlugin,
     "icarl": ICaRL,
     "agem": AGEM,
     "bic": BiCPlugin,
@@ -67,7 +68,6 @@ plugin_matcher = {
 
 
 def match_plugin(plugin_type: str, model, optim, crit, **kwargs):
-    # first check if the type is a plugin or other todo later
     if plugin_type == 'ewc' or plugin_type == 'bic':
         return plugin_matcher[plugin_type](**kwargs)
     return plugin_matcher[plugin_type](model=model, optimizer=optim, criterion=crit, **kwargs)
@@ -106,7 +106,7 @@ def baseline_fn(data, cl_type: str, model: str, log_file: str, epochs=64, batch_
         collect_all=True
     )
 
-    crit = nn.MSELoss()
+    crit = nn.CrossEntropyLoss().to(global_device)
     network = match_model(model)(len(classes))
     optimizer = torch.optim.Adam(network.parameters(), 0.03)
 

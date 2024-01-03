@@ -43,24 +43,30 @@ class SequentialMultiModalFeatures(ContinualDataset):
     SETTING = 'class-il'
     TRANSFORM = None
     N_TASKS = 4
-    #TODO: need to add a better train and test split because at the moment the test dataset only has 4 classes
-    def __init__(self, args: Namespace):
-        #load the file
-        data = hkl.load(args.modal_file)
-        # print(data)
-        self.train_X, self.train_y = data['train_data']
-        self.train_y = np.argmax(self.train_y, axis=1)
-        self.test_X, self.test_y = data['testing_data']
-        self.test_y = np.argmax(self.test_y,axis=1)
-        self.classes = []
 
-        if args.validation:
-            train_data, val_data, train_labels, val_labels = train_test_split(self.train_X, self.train_y, test_size=0.1,
-                                                                              random_state=42)
-            self.train_X = train_data
-            self.train_y = train_labels
-            self.validation = (val_data, val_labels)
+    def __init__(self, args: Namespace, train, test, validation=None):
+        #load the file
+        self.train_X, self.train_y = train
+        self.test_X, self.test_y = test
+        if validation is not None:
+            self.validation = validation
+        self.classes = []
+        # data = hkl.load(args.modal_file)
+        # # print(data)
+        # self.train_X, self.train_y = data['train_data']
+        # self.train_y = np.argmax(self.train_y, axis=1)
+        # self.test_X, self.test_y = data['testing_data']
+        # self.test_y = np.argmax(self.test_y,axis=1)
+        # self.classes = []
+        #
+        # if args.validation:
+        #     train_data, val_data, train_labels, val_labels = train_test_split(self.train_X, self.train_y, test_size=0.1,
+        #                                                                       random_state=42)
+        #     self.train_X = train_data
+        #     self.train_y = train_labels
+        #     self.validation = (val_data, val_labels)
         super().__init__(args)
+
 
 
     def get_data_loaders(self, return_dataset=False) -> Tuple[DataLoader, DataLoader]:
@@ -98,3 +104,23 @@ class SequentialMultiModalFeatures(ContinualDataset):
     @staticmethod
     def get_denormalization_transform() -> transforms:
         return transforms.Lambda(lambda x: x)
+
+
+def create_multimodal_data(args):
+    data = hkl.load(args.modal_file)
+    # print(data)
+    train_X, train_y = data['train_data']
+    train_y = np.argmax(train_y, axis=1)
+    test_X, test_y = data['testing_data']
+    test_y = np.argmax(test_y, axis=1)
+    classes = []
+
+    if args.validation:
+        train_data, val_data, train_labels, val_labels = train_test_split(train_X, train_y, test_size=0.1,
+                                                                          random_state=42)
+        train_X = train_data
+        train_y = train_labels
+        validation = (val_data, val_labels)
+        return (train_X, train_y), (test_X, test_y), validation
+    else:
+        return (train_X,train_y), (test_X,test_y)

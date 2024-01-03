@@ -1,0 +1,18 @@
+{
+    "runs_per_experiment": 1,
+    "baseline_configuration": "base_config.json",
+    "configurations": [
+         {
+            "type": "baseline_hart",
+            "files": "../SensorBasedTransformerTorch/datasets/processed/SHL",
+            "model": "hart",
+            "input_shape": 6,
+            "epochs": 25,
+            "batch_size": 64,
+            "validation": false,
+            "sparsity_profile": "profiles/hart/irr/hart_0.75.yaml"
+        }
+
+
+    ]
+}

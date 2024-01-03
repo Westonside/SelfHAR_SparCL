@@ -215,8 +215,8 @@ args = argparse.Namespace(
     # use_cl_mask=True,
     use_cl_mask=True,
     buffer_size=800, #1300 made imbalanced
-    buffer_weight=0.1, #TODO: original value was 0.1 # .15 and .5 got .27 and .1
-    buffer_weight_beta=0.5, #TODO: original was 0.5
+    buffer_weight=0.05, #TODO: original value was 0.1 # .15 and .5 got .27 and .1
+    buffer_weight_beta=0.03, #TODO: original was 0.5
     # dataset='seq-cifar10',
     dataset='multi_modal_features',
     # dataset='hhar_features' if test_har else 'seq-cifar10',
@@ -540,9 +540,9 @@ def train(model, trainset, criterion, scheduler, optimizer, epoch, t, buffer, da
                 cl_masked_output = outputs + mask_add_on  # now perform the masking of the outputs for the other classes
                 ce_loss = criterion(cl_masked_output, targets)  # calculate the loss
             else:
-                # ce_loss = criterion(outputs, targets)
+                ce_loss = criterion(outputs, targets)
                 # test with mse
-                ce_loss = loss_fn(criterion, outputs, targets)
+                # ce_loss = loss_fn(criterion, outputs, targets)
                 # nn.MSELoss()(torch.argmax(outputs, dim=1).float(), targets)
         loss = ce_loss  # set the loss
         # your loss will be the loss per item in the batch
@@ -1374,7 +1374,7 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()  # clear the cache after each run
             gc.collect()
     # now run the baselines
-    if sensor_dataset is not None:
+    if sensor_dataset is not None: # this ensures that the baseline gets the same dataset
         user_set = UserDataLoader((sensor_dataset.train_X, sensor_dataset.train_y), (sensor_dataset.test_X, sensor_dataset.test_y), sensor_dataset.classes)
         icarl_baseline.run_baseline(user_set, baseline_config)
     else:

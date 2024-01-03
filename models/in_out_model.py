@@ -5,7 +5,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.init import kaiming_normal_
 
-
+"""
+    Base model that is used when taking in features from SSL methods
+"""
 class InOut(nn.Module):
     def __init__(self, in_planes: int, classes: int, relu=False,dropout_rate=0.2, features=256):
         super(InOut, self).__init__()
@@ -15,7 +17,6 @@ class InOut(nn.Module):
         self.relu = nn.ReLU() if relu else None
 
         self.layer2 = nn.Linear(features, classes)
-        self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         # x = self.flatten(x)
@@ -26,7 +27,7 @@ class InOut(nn.Module):
         x = self.layer2(x)
         return x
 
-
+    # old code used to use dynamic CL architecture
     def extend_fc_layer(self, new_classes: int):
         # this will extend the last layer of the model to have more classes based on the classes
         if self.layer2 is not None:
