@@ -15,7 +15,7 @@ from .utils_pr import weight_pruning, weight_growing
 
 prune_algo = None
 retrain = None
-
+# code used for pruning the model, this implementation all comes from https://github.com/neu-spiral/SparCL
 
 def main_prune_parse_arguments(parser):
     prune_retrain = parser.add_mutually_exclusive_group()
@@ -54,13 +54,10 @@ def prune_update(epoch=0, batch_idx=0):
 def prune_harden(args, model, option=None):
     configs, prune_ratios = load_configs(model, args.sp_config_file, logger=None)
 
-    # if args.sp_global_weight_sparsity > 0:
-    #     update_prune_ratio(args, model, prune_ratios, args.sp_global_weight_sparsity)
 
     for key in prune_ratios:
         print("prune_ratios[{}]:{}".format(key, prune_ratios[key]))
 
-    # self.logger.info("Hardened weight sparsity: name, num_nonzeros, total_num, sparsity")
     print("Hardened weight sparsity: name, num_nonzeros, total_num, sparsity")
     first = True
     for (name, W) in model.named_parameters(): # get the parameters

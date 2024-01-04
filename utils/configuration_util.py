@@ -18,7 +18,7 @@ def load_config(config_file: str):
     return configuration
 
 
-def load_data_model(configuration, args, features=512, dropout=0.3):
+def load_data_model(configuration, args, features=512, dropout=0.3): # this sets the arg values used in the funciton and gets model and dataset
     args.modal_file = configuration["files"]
 
     if configuration.get("epochs") is not None:
@@ -70,7 +70,7 @@ def load_data_model(configuration, args, features=512, dropout=0.3):
     return model, dataset
 
 
-def balance_dataset(ds):
+def balance_dataset(ds): #testing features to evaluate performance on completly balanced classes
     un = np.unique(ds.train_y)
     smallest = min([np.count_nonzero(ds.train_y == x) for x in un])
     balanced = np.hstack([np.where(ds.train_y == x)[0][0:smallest] for x in un])
@@ -82,7 +82,7 @@ def balance_dataset(ds):
 def load_dataset(file, model_type, args):
     args.modal_file = file
     if 'features' in model_type:
-        if model_type == 'cnn_features':
+        if model_type == 'cnn_features': # if cnn features, horizantally stack the features
             path = file[:file.rfind('/')+1]
             ds_name = file[file.rfind('/')+1:]
             files = [x for x in os.listdir(path) if ds_name in x]
@@ -93,19 +93,19 @@ def load_dataset(file, model_type, args):
             data = SequentialCNNDataset(args, train,test)
             print('testing') # here is where you have to load the data and then combine the data
 
-        elif model_type == "multi_modal_clustering_features":
+        elif model_type == "multi_modal_clustering_features": # if multimodal features, load the data and pass it to the dataset
             load = create_multimodal_data(args)
             data = SequentialMultiModalFeatures(args,*load)
             print('testing') # here you just load the data and will pass it to the dataset
         else:
             raise Exception("Invalid feature type provided! Options include cnn_features or multi_modal_clustering_features")
     elif model_type == 'baseline_hart':
-        data = SequentialSignalDataset(args)
+        data = SequentialSignalDataset(args) # if sequential signal, load the data and pass it to the dataset this assumes that the dataset has 8 classes
 
     return data
 
 
-def load_model(model_type, input_shape, num_classes:int, features=128, dropout=0.2):
+def load_model(model_type, input_shape, num_classes:int, features=128, dropout=0.2): # for setting the model options are hart or simple
     model = models[model_type]
     if model_type == 'simple':
         model = model(input_shape, num_classes, features=features,dropout_rate=dropout)

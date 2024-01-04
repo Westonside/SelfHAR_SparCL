@@ -84,7 +84,6 @@ class SequentialCIFAR10(ContinualDataset):
                                    download=download, transform=test_transform)
 
         train, test = store_masked_loaders(train_dataset, test_dataset, self) # this will split into tasks
-        # TODO(zifeng): do this for other datasets
         if not return_dataset:
             return train, test
         else:

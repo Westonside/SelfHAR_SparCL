@@ -1,4 +1,4 @@
-class EarlyStop():
+class EarlyStop(): # early stopping mechanism to stop training if the model is not improving
     def __init__(self, patience: int, testing=False):
        self.count = 0
        self.patience = patience

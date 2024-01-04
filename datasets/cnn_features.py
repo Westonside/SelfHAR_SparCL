@@ -43,8 +43,6 @@ class SequentialCNNDataset(ContinualDataset):
     SETTING = 'class-il'
     TRANSFORM = None
     N_TASKS = 4
-    #TODO: need to add a better train and test split because at the moment the test dataset only has 4 classes
-    # SHL DOES NOT HAVE ALL 8 CLASSES IN THE TESTING
     def __init__(self, args: Namespace, train,test):
         #load the file
         # print(data)

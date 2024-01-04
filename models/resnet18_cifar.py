@@ -144,7 +144,6 @@ import torch.nn.functional as F
 from torch.nn.functional import relu, avg_pool2d
 from typing import List
 
-# TODO: create a new model with an input and a classifier layer input 96 -> 6 classes
 # could have a hidden layer 96->1024
 #first get just in and classifier
 #then investigate sparsity
@@ -190,7 +189,7 @@ class BasicBlock(nn.Module):
         """
         Compute a forward pass.
         :param x: input tensor (batch_size, input_size)
-        :return: output tensor (10) TODO IGNORE MIDDLE LAYERS IN THE FORWARED
+        :return: output tensor (10) 
         """ #x will passed to feature extractor
         out = relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
@@ -234,7 +233,7 @@ class ResNet(nn.Module):
                                        self.layer3,
                                        self.layer4
                                        )
-        self.classifier = self.linear #this self.linear is 224 this is classifier layer  TODO PASS INPUT to the classifier layer
+        self.classifier = self.linear #this self.linear is 224 this is classifier layer
 
     def _make_layer(self, block: BasicBlock, planes: int,
                     num_blocks: int, stride: int) -> nn.Module:

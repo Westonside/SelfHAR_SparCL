@@ -107,19 +107,6 @@ class SparseTraining(object):
         else:
             self.mask_update_decay_epoch = None
 
-        # if "upper_bound" in self.configs:
-        #     self.upper_bound = self.configs['upper_bound']
-        # else:
-        #     self.upper_bound = None
-        # if "lower_bound" in self.configs:
-        #     self.lower_bound = self.configs['lower_bound']
-        # else:
-        #     self.lower_bound = None
-        # if "mask_update_decay_epoch" in self.configs:
-        #     self.mask_update_decay_epoch = self.configs['mask_update_decay_epoch']
-        # else:
-        #     self.mask_update_decay_epoch = None
-
 
 
         self.init()
@@ -282,11 +269,11 @@ class SparseTraining(object):
                 lower_bound = self.lower_bound.split('-')  # prune-to sparsity
                 if epoch >= freq_decay_epoch: # if the epoch is greater than or equal to the frequencydecay epoch
                     freq *= 1 #dont change the frequency
-                    bound_index += 1 #increment the bound_index upper todo bound will say the upper bound to how much update the mask update
+                    bound_index += 1
         except ValueError: # if mask_update_decay_epoch has multiple entries meaning
             freq_decay_epoch = self.mask_update_decay_epoch.split('-') # split the values
             for i in range(len(freq_decay_epoch)):  # for each frequency decay epoch ex: '5-45' -> 5,45
-                freq_decay_epoch[i] = int(freq_decay_epoch[i]) # add the freq decay epoch todo unsure what these values are
+                freq_decay_epoch[i] = int(freq_decay_epoch[i])
 
             try:
                 float(self.upper_bound) #ex: '0.74-0.75-0.75' multiple floats goto exception
